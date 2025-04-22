@@ -1,11 +1,41 @@
 {
-  "name": "mercon",
-  "module": "index.ts",
-  "type": "module",
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  }
+	"name": "mercon",
+	"version": "0.1.0",
+	"description": "Solana data downloading utility for transactions, Meteora data, and token prices",
+	"module": "index.ts",
+	"type": "module",
+	"scripts": {
+		"start": "bun run index.ts",
+		"dev": "bun --watch index.ts",
+		"example": "bun run examples/basic.ts",
+		"build": "bun build index.ts --outdir ./dist"
+	},
+	"keywords": [
+		"solana",
+		"blockchain",
+		"data",
+		"meteora",
+		"transactions",
+		"prices"
+	],
+	"author": "",
+	"license": "MIT",
+	"devDependencies": {
+		"@types/bun": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	},
+	"dependencies": {
+		"@solana/web3.js": "^1.98.0",
+		"axios": "^1.8.4",
+		"dotenv": "^16.5.0"
+	},
+	"engines": {
+		"node": ">=18.0.0",
+		"bun": ">=1.0.0"
+	},
+	"bin": {
+		"mercon": "./bin/cli.js"
+	}
 }
