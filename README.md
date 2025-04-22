@@ -1,6 +1,7 @@
 # Mercon
 
-A Solana data downloading utility for fetching wallet transactions, Meteora pool data, and token prices.
+An all in one library for downloading data related to Meteora Transactions, Positions and Pools. Inspired by [@GeekLad's](https://github.com/GeekLad) [meteora-dlmm-db](https://github.com/GeekLad/meteora-dlmm-db).
+
 
 ## Features
 
@@ -8,17 +9,20 @@ A Solana data downloading utility for fetching wallet transactions, Meteora pool
 - Retrieve Meteora liquidity pool data and positions
 - Get token price information
 - Progress tracking and callbacks
-- Environment variable configuration support
 
 ## Installation
 
 ```bash
 # Using npm
 npm install mercon
+```
 
+```bash
 # Using yarn
 yarn add mercon
+```
 
+```bash
 # Using bun
 bun add mercon
 ```
@@ -71,7 +75,7 @@ interface DataDownloaderConfig {
 }
 ```
 
-## Using Environment Variables
+### Using Environment Variables
 
 You can also configure the downloader using environment variables:
 

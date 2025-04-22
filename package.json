@@ -1,12 +1,10 @@
 {
 	"name": "mercon",
 	"version": "0.1.0",
-	"description": "Solana data downloading utility for transactions, Meteora data, and token prices",
+	"description": "An all in one library for downloading data related to Meteora Transactions, Positions and Pools. Inspired by @GeekLad's meteora-dlmm-db.",
 	"module": "index.ts",
 	"type": "module",
 	"scripts": {
-		"start": "bun run index.ts",
-		"dev": "bun --watch index.ts",
 		"example": "bun run examples/basic.ts",
 		"build": "bun build index.ts --outdir ./dist"
 	},
