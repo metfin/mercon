@@ -22,7 +22,7 @@ export class TransactionService {
 	 * @param until Optional signature to fetch transactions until
 	 */
 	public async getTransactionSignatures(
-		limit = 100,
+		limit = 1000,
 		before?: string,
 		until?: string,
 	): Promise<ConfirmedSignatureInfo[]> {
@@ -60,36 +60,67 @@ export class TransactionService {
 	}
 
 	/**
-	 * Fetch transactions in batches
-	 * @param batchSize Size of each batch
+	 * Fetch all signatures first, then process transactions in batches with progress updates
+	 * @param batchSize Size of each processing batch (max 300 due to RPC limitations)
+	 * @param onProgress Callback for progress updates
 	 */
 	public async getTransactionsInBatches(
 		batchSize = 300,
+		onProgress?: (status: string, progress: number, total: number) => void,
 	): Promise<TransactionData[]> {
-		const transactions: TransactionData[] = [];
+		// Step 1: Fetch all signatures first
+		const allSignatures: ConfirmedSignatureInfo[] = [];
 		let before: string | undefined;
-		const keepFetching = true;
-		const fetchedCount = 0;
+		let hasMore = true;
 
-		while (keepFetching) {
-			const signatures = await this.getTransactionSignatures(batchSize, before);
+		onProgress?.("Fetching signatures", 0, 0);
+
+		while (hasMore) {
+			const signatures = await this.getTransactionSignatures(1000, before);
 
 			if (signatures.length === 0) {
+				hasMore = false;
 				break;
 			}
 
-			const signatureStrings = signatures.map((sig) => sig.signature);
-			const batchTransactions = await this.getTransactions(signatureStrings);
-
-			transactions.push(...batchTransactions);
+			allSignatures.push(...signatures);
+			onProgress?.(
+				"Fetching signatures",
+				allSignatures.length,
+				signatures.length < 1000
+					? allSignatures.length
+					: allSignatures.length + 1000,
+			);
 
 			// Update the before parameter for the next batch
 			if (signatures.length > 0) {
 				before = signatures[signatures.length - 1]?.signature;
-			} else {
-				break;
+			}
+
+			// If we got less than 1000 signatures, we've reached the end
+			if (signatures.length < 1000) {
+				hasMore = false;
 			}
 		}
+
+		// Step 2: Process transactions in batches of 300
+		const transactions: TransactionData[] = [];
+		const signatureStrings = allSignatures.map((sig) => sig.signature);
+		const totalBatches = Math.ceil(signatureStrings.length / batchSize);
+
+		for (let i = 0; i < totalBatches; i++) {
+			const batchSignatures = signatureStrings.slice(
+				i * batchSize,
+				(i + 1) * batchSize,
+			);
+
+			onProgress?.("Processing transactions", i + 1, totalBatches);
+
+			const batchTransactions = await this.getTransactions(batchSignatures);
+			transactions.push(...batchTransactions);
+		}
+
+		onProgress?.("Completed", totalBatches, totalBatches);
 
 		return transactions;
 	}
@@ -152,6 +183,82 @@ export class TransactionService {
 		}
 
 		return transactions;
+	}
+
+	/**
+	 * Process transactions concurrently with realtime analysis
+	 * @param meteoraProgramId The Meteora program ID to filter transactions
+	 * @param onTransactionProcessed Callback for when transactions are processed
+	 * @param onProgress Callback for progress updates
+	 */
+	public async analyzeMeteoraBatches(
+		meteoraProgramId: string,
+		onTransactionProcessed?: (transactions: TransactionData[]) => void,
+		onProgress?: (status: string, progress: number, total: number) => void,
+	): Promise<TransactionData[]> {
+		// First get all signatures
+		const allSignatures: ConfirmedSignatureInfo[] = [];
+		let before: string | undefined;
+		let hasMore = true;
+
+		onProgress?.("Fetching signatures", 0, 0);
+
+		while (hasMore) {
+			const signatures = await this.getTransactionSignatures(1000, before);
+
+			if (signatures.length === 0) {
+				hasMore = false;
+				break;
+			}
+
+			allSignatures.push(...signatures);
+			onProgress?.(
+				"Fetching signatures",
+				allSignatures.length,
+				signatures.length < 1000
+					? allSignatures.length
+					: allSignatures.length + 1000,
+			);
+
+			// Update the before parameter for the next batch
+			if (signatures.length > 0) {
+				before = signatures[signatures.length - 1]?.signature;
+			}
+
+			// If we got less than 1000 signatures, we've reached the end
+			if (signatures.length < 1000) {
+				hasMore = false;
+			}
+		}
+
+		// Process transactions in concurrent batches and analyze as they come in
+		const meteoraTransactions: TransactionData[] = [];
+		const signatureStrings = allSignatures.map((sig) => sig.signature);
+		const totalBatches = Math.ceil(signatureStrings.length / 300);
+		const batchSize = 300;
+
+		for (let i = 0; i < totalBatches; i++) {
+			const batchSignatures = signatureStrings.slice(
+				i * batchSize,
+				(i + 1) * batchSize,
+			);
+
+			onProgress?.("Processing transactions", i + 1, totalBatches);
+
+			const batchTransactions = await this.getTransactions(batchSignatures);
+
+			// If callback is provided, process transactions as they come in
+			if (onTransactionProcessed) {
+				onTransactionProcessed(batchTransactions);
+			}
+
+			// You can later add code here to filter Meteora transactions
+			// and collect them in meteoraTransactions array
+		}
+
+		onProgress?.("Completed", totalBatches, totalBatches);
+
+		return meteoraTransactions;
 	}
 
 	/**

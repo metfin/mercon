@@ -1,15 +1,15 @@
-import { DataDownloader } from "../index";
+import { DataDownloader, TransactionService } from "../index";
 import type { DataDownloaderConfig } from "../index";
 
-// Create a simple example to demonstrate how to use the library
-async function runExample() {
+// Example 1: Using the DataDownloader class
+async function runDownloaderExample() {
 	console.log("Mercon - Data Downloader Example");
 	console.log("---------------------------------------");
 
 	// Replace these values with your own
 	const config: DataDownloaderConfig = {
-		walletAddress: "YOUR_WALLET_ADDRESS", // Replace with a valid Solana wallet address
-		rpcUrl: "https://api.mainnet-beta.solana.com", // Replace with your RPC URL
+		walletAddress: "BpYUs2g6QyyMdagmgEUzpbvCH8SBHopjejhkAe2Kcbmq", // Replace with a valid Solana wallet address
+		rpcUrl: "https://grateful-jerrie-fast-mainnet.helius-rpc.com", // Replace with your RPC URL
 		callbacks: {
 			onProgress: (progress, message) => {
 				// Update progress bar
@@ -60,5 +60,66 @@ async function runExample() {
 	}
 }
 
-// Run the example
-runExample().catch(console.error);
+// Example 2: Using TransactionService directly with the new batch methods
+async function runTransactionServiceExample() {
+	console.log("\n\nMercon - Direct TransactionService Example");
+	console.log("---------------------------------------");
+
+	// Replace these values with your own
+	const walletAddress = "BpYUs2g6QyyMdagmgEUzpbvCH8SBHopjejhkAe2Kcbmq";
+	const rpcUrl = "https://grateful-jerrie-fast-mainnet.helius-rpc.com";
+
+	// Create the transaction service
+	const transactionService = new TransactionService(rpcUrl, walletAddress);
+
+	try {
+		// Create a progress bar rendering function
+		const renderProgress = (status: string, current: number, total: number) => {
+			const progress = total > 0 ? (current / total) * 100 : 0;
+			const barLength = 30;
+			const filledLength = Math.round(barLength * (progress / 100));
+			const bar =
+				"█".repeat(filledLength) + "░".repeat(barLength - filledLength);
+
+			// Clear line and print progress
+			process.stdout.write(
+				`\r[${bar}] ${progress.toFixed(1)}% - ${status} (${current}/${total || "?"})`,
+			);
+		};
+
+		console.log("Fetching transactions in batches with progress updates:");
+		const transactions = await transactionService.getTransactionsInBatches(
+			300, // Batch size
+			renderProgress, // Progress callback
+		);
+
+		console.log("\n\nFetched transactions:", transactions.length);
+		if (transactions.length > 0) {
+			console.log("First transaction sample:");
+			console.log(transactions[0]);
+		}
+
+		// Example with Meteora analysis (commented out for now)
+		/*
+		console.log("\nAnalyzing Meteora transactions:");
+		const meteoraTransactions = await transactionService.analyzeMeteoraBatches(
+			"your_meteora_program_id_here",
+			(batchTransactions) => {
+				// Process each batch as it arrives
+				console.log(`\nProcessing batch of ${batchTransactions.length} transactions`);
+			},
+			renderProgress
+		);
+		*/
+	} catch (error) {
+		console.error("Transaction service example failed:", error);
+	}
+}
+
+// Run the examples
+async function runAllExamples() {
+	await runDownloaderExample();
+	await runTransactionServiceExample();
+}
+
+runAllExamples().catch(console.error);
