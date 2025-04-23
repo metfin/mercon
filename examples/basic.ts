@@ -1,5 +1,6 @@
 import { DataDownloader, TransactionService } from "../index";
 import type { DataDownloaderConfig } from "../index";
+import { METEORA_PROGRAM_ID } from "../src/services/MeteoraParser";
 
 // Example 1: Using the DataDownloader class
 async function runDownloaderExample() {
@@ -102,11 +103,11 @@ async function runTransactionServiceExample() {
 		// Example with Meteora analysis (commented out for now)
 		/*
 		console.log("\nAnalyzing Meteora transactions:");
-		const meteoraTransactions = await transactionService.analyzeMeteoraBatches(
-			"your_meteora_program_id_here",
-			(batchTransactions) => {
+		const meteoraInstructions = await transactionService.analyzeMeteoraBatches(
+			METEORA_PROGRAM_ID, // Using the constant from MeteoraParser.ts
+			(batchTransactions, meteoraInstructions) => {
 				// Process each batch as it arrives
-				console.log(`\nProcessing batch of ${batchTransactions.length} transactions`);
+				console.log(`\nProcessing batch of ${batchTransactions.length} transactions with ${meteoraInstructions.length} Meteora instructions`);
 			},
 			renderProgress
 		);

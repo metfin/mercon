@@ -1,4 +1,5 @@
 import { PublicKey } from "@solana/web3.js";
+import type { MeteoraDlmmInstruction } from "../services/MeteoraParser";
 
 // Configuration type for the data downloader
 export interface DataDownloaderConfig {
@@ -21,14 +22,6 @@ export interface TransactionData {
 	// Add more fields as needed
 }
 
-// Types for Meteora API data
-export interface MeteoraData {
-	poolId?: string;
-	tokenA?: string;
-	tokenB?: string;
-	// Add more Meteora-specific fields as needed
-}
-
 // Types for token price data
 export interface TokenPriceData {
 	symbol: string;
@@ -40,6 +33,6 @@ export interface TokenPriceData {
 // Combined data output
 export interface DownloadedData {
 	transactions?: TransactionData[];
-	meteora?: MeteoraData[];
+	meteora?: MeteoraDlmmInstruction[];
 	tokenPrices?: TokenPriceData[];
 }

@@ -1,5 +1,10 @@
 import { TransactionService } from "../index";
 import type { TransactionData } from "../index";
+import { METEORA_PROGRAM_ID } from "../src/services/MeteoraParser";
+import type {
+	MeteoraDlmmInstruction,
+	MeteoraDlmmInstructionType,
+} from "../src/services/MeteoraParser";
 
 /**
  * Example showing how to use the TransactionService to analyze Meteora transactions
@@ -12,9 +17,6 @@ async function runMeteoraAnalysisExample() {
 	// Replace these values with your own
 	const walletAddress = "BpYUs2g6QyyMdagmgEUzpbvCH8SBHopjejhkAe2Kcbmq";
 	const rpcUrl = "https://grateful-jerrie-fast-mainnet.helius-rpc.com";
-
-	// Meteora program ID - replace with the actual Meteora program ID
-	const METEORA_PROGRAM_ID = "M2mx93ekt1fmXSVkTrUL9xVFHkmME8HTUi5Cyc5aF7K";
 
 	// Create the transaction service
 	const transactionService = new TransactionService(rpcUrl, walletAddress);
@@ -48,36 +50,29 @@ async function runMeteoraAnalysisExample() {
 		};
 
 		// Function to analyze transaction batches as they arrive
-		const analyzeTransactionBatch = (transactions: TransactionData[]) => {
+		const analyzeTransactionBatch = (
+			transactions: TransactionData[],
+			meteoraInstructions: MeteoraDlmmInstruction[],
+		) => {
 			stats.processed += transactions.length;
+			stats.total += meteoraInstructions.length;
 
-			// This is where you would implement your actual Meteora transaction detection logic
-			// For this example, we're just simulating finding different transaction types
-
-			// Simulate finding Meteora transactions (in a real scenario, you would check transaction data)
-			for (const tx of transactions) {
-				// In a real implementation, you would check if this transaction involves the Meteora program
-				// and identify the specific operation type based on the instruction data
-
-				// Simulate randomly finding different Meteora operations
-				const random = Math.random();
-
-				if (random < 0.05) {
-					// 5% chance to be a create position
-					stats.createPositions++;
-					stats.total++;
-				} else if (random < 0.15) {
-					// 10% chance to be add liquidity
-					stats.addLiquidity++;
-					stats.total++;
-				} else if (random < 0.25) {
-					// 10% chance to be remove liquidity
-					stats.removeLiquidity++;
-					stats.total++;
-				} else if (random < 0.3) {
-					// 5% chance to be close position
-					stats.closePositions++;
-					stats.total++;
+			// Process the actual Meteora instructions
+			for (const instruction of meteoraInstructions) {
+				// Count by instruction type
+				switch (instruction.instructionType) {
+					case "open":
+						stats.createPositions++;
+						break;
+					case "add":
+						stats.addLiquidity++;
+						break;
+					case "remove":
+						stats.removeLiquidity++;
+						break;
+					case "close":
+						stats.closePositions++;
+						break;
 				}
 			}
 		};
@@ -88,7 +83,7 @@ async function runMeteoraAnalysisExample() {
 		);
 
 		// Use the analyzeMeteoraBatches method to process transactions as they arrive
-		const meteoraTransactions = await transactionService.analyzeMeteoraBatches(
+		const meteoraInstructions = await transactionService.analyzeMeteoraBatches(
 			METEORA_PROGRAM_ID,
 			analyzeTransactionBatch,
 			renderProgress,
@@ -97,11 +92,17 @@ async function runMeteoraAnalysisExample() {
 		console.log("\n\nAnalysis complete!");
 		console.log("---------------------------------------");
 		console.log("Total transactions processed:", stats.processed);
-		console.log("Total Meteora transactions found:", stats.total);
+		console.log("Total Meteora instructions found:", stats.total);
 		console.log("Create positions:", stats.createPositions);
 		console.log("Add liquidity:", stats.addLiquidity);
 		console.log("Remove liquidity:", stats.removeLiquidity);
 		console.log("Close positions:", stats.closePositions);
+
+		// Display some sample instructions if available
+		if (meteoraInstructions.length > 0) {
+			console.log("\nSample Meteora instruction:");
+			console.log(meteoraInstructions[0]);
+		}
 	} catch (error) {
 		console.error("\nMeteora analysis failed:", error);
 	}

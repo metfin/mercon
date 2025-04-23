@@ -5,6 +5,11 @@ import {
 	type ParsedTransactionWithMeta,
 } from "@solana/web3.js";
 import type { TransactionData } from "../types";
+import {
+	METEORA_PROGRAM_ID,
+	extractMeteoraInstructions,
+	type MeteoraDlmmInstruction,
+} from "./MeteoraParser";
 
 export class TransactionService {
 	private connection: Connection;
@@ -192,10 +197,13 @@ export class TransactionService {
 	 * @param onProgress Callback for progress updates
 	 */
 	public async analyzeMeteoraBatches(
-		meteoraProgramId: string,
-		onTransactionProcessed?: (transactions: TransactionData[]) => void,
+		meteoraProgramId: string = METEORA_PROGRAM_ID,
+		onTransactionProcessed?: (
+			transactions: TransactionData[],
+			meteoraInstructions: MeteoraDlmmInstruction[],
+		) => void,
 		onProgress?: (status: string, progress: number, total: number) => void,
-	): Promise<TransactionData[]> {
+	): Promise<MeteoraDlmmInstruction[]> {
 		// First get all signatures
 		const allSignatures: ConfirmedSignatureInfo[] = [];
 		let before: string | undefined;
@@ -232,7 +240,7 @@ export class TransactionService {
 		}
 
 		// Process transactions in concurrent batches and analyze as they come in
-		const meteoraTransactions: TransactionData[] = [];
+		const meteoraInstructions: MeteoraDlmmInstruction[] = [];
 		const signatureStrings = allSignatures.map((sig) => sig.signature);
 		const totalBatches = Math.ceil(signatureStrings.length / 300);
 		const batchSize = 300;
@@ -247,18 +255,39 @@ export class TransactionService {
 
 			const batchTransactions = await this.getTransactions(batchSignatures);
 
-			// If callback is provided, process transactions as they come in
-			if (onTransactionProcessed) {
-				onTransactionProcessed(batchTransactions);
+			// Process the transactions to find Meteora instructions
+			const batchFullTransactions = await Promise.all(
+				batchSignatures.map(async (signature) => {
+					try {
+						return await this.getTransaction(signature);
+					} catch (error) {
+						console.error(`Error fetching transaction ${signature}:`, error);
+						return null;
+					}
+				}),
+			);
+
+			// Extract Meteora instructions from transactions
+			const batchMeteoraInstructions: MeteoraDlmmInstruction[] = [];
+			for (const tx of batchFullTransactions) {
+				if (tx) {
+					const instructions = extractMeteoraInstructions(tx);
+					batchMeteoraInstructions.push(...instructions);
+				}
 			}
 
-			// You can later add code here to filter Meteora transactions
-			// and collect them in meteoraTransactions array
+			// Add to the overall collection
+			meteoraInstructions.push(...batchMeteoraInstructions);
+
+			// If callback is provided, process transactions as they come in
+			if (onTransactionProcessed) {
+				onTransactionProcessed(batchTransactions, batchMeteoraInstructions);
+			}
 		}
 
 		onProgress?.("Completed", totalBatches, totalBatches);
 
-		return meteoraTransactions;
+		return meteoraInstructions;
 	}
 
 	/**
