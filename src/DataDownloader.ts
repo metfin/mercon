@@ -2,104 +2,97 @@ import { Config } from "./config";
 import { TransactionService } from "./services/TransactionService";
 import { MeteoraService } from "./services/MeteoraService";
 import { TokenPriceService } from "./services/TokenPriceService";
-import { METEORA_PROGRAM_ID } from "./services/MeteoraParser";
-import type { DataDownloaderConfig, DownloadedData } from "./types";
-import type { MeteoraDlmmInstruction } from "./services/MeteoraParser";
+import type { DataDownloaderConfig } from "./types";
+import type { DownloadedData } from "./types/downloaded-data";
 
 export class DataDownloader {
-	private config: Config;
-	private transactionService: TransactionService;
-	private meteoraService: MeteoraService;
-	private tokenPriceService: TokenPriceService;
+  private config: Config;
+  private transactionService: TransactionService;
+  private meteoraService: MeteoraService;
+  private tokenPriceService: TokenPriceService;
 
-	constructor(config: DataDownloaderConfig) {
-		this.config = new Config(config);
-		this.transactionService = new TransactionService(
-			this.config.getRpcUrl(),
-			this.config.getWalletAddress(),
-		);
-		this.meteoraService = new MeteoraService();
-		this.tokenPriceService = new TokenPriceService();
-	}
+  constructor(config: DataDownloaderConfig) {
+    this.config = new Config(config);
+    this.transactionService = new TransactionService(
+      this.config.getRpcUrl(),
+      this.config.getWalletAddress()
+    );
+    this.meteoraService = new MeteoraService();
+    this.tokenPriceService = new TokenPriceService();
+  }
 
-	/**
-	 * Start downloading data
-	 * @param maxTransactions Maximum number of transactions to fetch (0 for all)
-	 */
-	public async download(maxTransactions = 1000): Promise<DownloadedData> {
-		const callbacks = this.config.getCallbacks();
-		const data: DownloadedData = {};
+  /**
+   * Start downloading data
+   * @param maxTransactions Maximum number of transactions to fetch (0 for all)
+   */
+  public async download(): Promise<DownloadedData> {
+    const callbacks = {
+      onDone: this.config.getOnDone(),
+      onProgress: this.config.getOnProgress(),
+      onError: this.config.getOnError(),
+    };
+    const startTime = new Date();
 
-		try {
-			// Fetch transaction data
-			callbacks.onProgress?.(0, "Starting data download...");
+    // Initialize data with required properties from DownloadedData interface
+    const data: DownloadedData = {
+      account: this.config.getWalletAddress(),
+      pairs: [],
+      positions: [],
+      transactions: 0,
+      startTime,
+      endTime: startTime, // Will be updated at the end
+    };
 
-			// Step 1: Download transaction data with progress updates
-			callbacks.onProgress?.(5, "Downloading transaction data...");
+    try {
+      // Fetch transaction data
+      callbacks.onProgress?.(0, 100);
 
-			data.transactions =
-				await this.transactionService.getTransactionsInBatches(
-					300, // batch size
-					(status, current, total) => {
-						// Map progress from 5% to 40%
-						const progressPercent = 5 + (current / total) * 35;
-						callbacks.onProgress?.(progressPercent, status);
-					},
-				);
+      // Step 1: Download transaction data with progress updates
+      callbacks.onProgress?.(5, 100);
 
-			callbacks.onProgress?.(
-				40,
-				`Fetched ${data.transactions.length} transactions`,
-			);
+      const transactionsData =
+        await this.transactionService.getTransactionsInBatches(
+          300, // batch size
+          (status, current, total) => {
+            // Map progress from 5% to 40%
+            const progressPercent = 5 + (current / total) * 35;
+            callbacks.onProgress?.(progressPercent, 100);
+          }
+        );
 
-			// Step 2: Analyze Meteora transactions
-			callbacks.onProgress?.(45, "Analyzing Meteora transactions...");
+      // Update transaction count in data
+      data.transactions = transactionsData.length;
 
-			// Store the Meteora instructions
-			const meteoraInstructions =
-				await this.transactionService.analyzeMeteoraBatches(
-					METEORA_PROGRAM_ID,
-					(transactions, instructions) => {
-						// Optional processing here if needed
-					},
-					(status, current, total) => {
-						// Map progress from 45% to 90%
-						const progressPercent = 45 + (current / total) * 45;
-						callbacks.onProgress?.(
-							progressPercent,
-							`Meteora analysis: ${status}`,
-						);
-					},
-				);
+      callbacks.onProgress?.(40, 100);
 
-			// Store Meteora data in the result
-			data.meteora = meteoraInstructions;
+      // Step 2: Analyze Meteora transactions
+      callbacks.onProgress?.(45, 100);
 
-			callbacks.onProgress?.(
-				90,
-				`Analyzed ${meteoraInstructions.length} Meteora instructions`,
-			);
+      // Update end time
+      data.endTime = new Date();
 
-			callbacks.onProgress?.(100, "Data download completed");
+      callbacks.onProgress?.(90, 100);
 
-			// Call the onDone callback
-			callbacks.onDone?.(data);
+      callbacks.onProgress?.(100, 100);
 
-			return data;
-		} catch (error) {
-			console.error("Error downloading data:", error);
-			callbacks.onError?.(
-				error instanceof Error ? error : new Error(String(error)),
-			);
-			throw error;
-		}
-	}
+      // Call the onDone callback
+      callbacks.onDone?.(data);
 
-	/**
-	 * Create a new DataDownloader instance from environment variables
-	 */
-	public static fromEnv(): DataDownloader {
-		const config = Config.createFromEnv();
-		return new DataDownloader(config.getConfig());
-	}
+      return data;
+    } catch (error) {
+      console.error("Error downloading data:", error);
+      callbacks.onError?.(
+        error instanceof Error ? error : new Error(String(error))
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Create a new DataDownloader instance from environment variables
+   */
+  public static fromEnv(): DataDownloader {
+    const config = Config.createFromEnv();
+    return new DataDownloader(config.getConfig());
+  }
 }

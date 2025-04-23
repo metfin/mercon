@@ -1,6 +1,6 @@
 import axios from "axios";
 
-interface MeteoraPair {
+export interface MeteoraPair {
 	id: string;
 	address: string;
 	apr: number;
@@ -56,7 +56,7 @@ interface MeteoraPair {
 	};
 }
 
-interface MeteoraPosition {
+export interface MeteoraPosition {
 	address: string;
 	daily_fee_yield: number;
 	fee_apr_24h: number;
