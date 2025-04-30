@@ -1,5 +1,3 @@
-import axios from "axios";
-
 export interface MeteoraPair {
   id: string;
   address: string;
@@ -71,6 +69,24 @@ export interface MeteoraPosition {
   total_reward_y_claimed: number;
 }
 
+export interface MeteoraPositionTransactions {
+  deposits: Array<{
+    tx_id: string;
+    token_x_usd_amount: number;
+    token_y_usd_amount: number;
+  }>;
+  withdrawals: Array<{
+    tx_id: string;
+    token_x_usd_amount: number;
+    token_y_usd_amount: number;
+  }>;
+  fees: Array<{
+    tx_id: string;
+    token_x_usd_amount: number;
+    token_y_usd_amount: number;
+  }>;
+}
+
 export class MeteoraService {
   private baseUrl: string;
 
@@ -104,9 +120,8 @@ export class MeteoraService {
 
         // Check if this is a rate limit error
         const isRateLimit =
-          axios.isAxiosError(error) &&
-          (error.response?.status === 429 ||
-            errorMsg.includes("Too Many Requests"));
+          (error instanceof Response && error.status === 429) ||
+          errorMsg.includes("Too Many Requests");
 
         // If we've reached max retries or error is not a rate limit issue, throw
         if (retries > maxRetries || !isRateLimit) {
@@ -142,14 +157,18 @@ export class MeteoraService {
     return this.withRetry(
       async () => {
         try {
-          const response = await axios.get<MeteoraPair>(
-            `${this.baseUrl}/pairs/${pairAddress}`
-          );
+          const response = await fetch(`${this.baseUrl}/pairs/${pairAddress}`);
+
+          if (!response.ok) {
+            throw new Error(`Request failed with status ${response.status}`);
+          }
+
+          const data = (await response.json()) as MeteoraPair;
 
           console.log(
             `[METEORA API] Successfully fetched pair data for ${pairAddress.slice(0, 8)}`
           );
-          return response.data;
+          return data;
         } catch (error) {
           console.error(
             "[METEORA API] Error fetching Meteora pair data:",
@@ -184,14 +203,20 @@ export class MeteoraService {
       async () => {
         try {
           // This is a placeholder for the actual API call
-          const response = await axios.get<MeteoraPosition>(
+          const response = await fetch(
             `${this.baseUrl}/positions/${positionAddress}`
           );
+
+          if (!response.ok) {
+            throw new Error(`Request failed with status ${response.status}`);
+          }
+
+          const data = (await response.json()) as MeteoraPosition;
 
           console.log(
             `[METEORA API] Successfully fetched position data for ${positionAddress.slice(0, 8)}`
           );
-          return response.data;
+          return data;
         } catch (error) {
           console.error(
             "[METEORA API] Error fetching Meteora liquidity positions:",
@@ -206,6 +231,73 @@ export class MeteoraService {
     ).catch((error) => {
       console.error(
         `[METEORA API] Failed to fetch position after retries: ${error instanceof Error ? error.message : String(error)}`
+      );
+      return null;
+    });
+  }
+
+  /**
+   * Fetch transactions for a position
+   * @param positionAddress The position address to fetch transactions for
+   */
+  public async getPositionTransactions(
+    positionAddress: string
+  ): Promise<MeteoraPositionTransactions | null> {
+    console.log(
+      `[METEORA API] Fetching transactions for position ${positionAddress.slice(0, 8)}...`
+    );
+
+    return this.withRetry(
+      async () => {
+        try {
+          const response = await fetch(
+            `${this.baseUrl}/positions/${positionAddress}/transactions`
+          );
+
+          if (!response.ok) {
+            throw new Error(`Request failed with status ${response.status}`);
+          }
+
+          const data = (await response.json()) as {
+            deposits: Array<{
+              tx_id: string;
+              token_x_usd_amount: number;
+              token_y_usd_amount: number;
+            }>;
+            withdrawals: Array<{
+              tx_id: string;
+              token_x_usd_amount: number;
+              token_y_usd_amount: number;
+            }>;
+            fees: Array<{
+              tx_id: string;
+              token_x_usd_amount: number;
+              token_y_usd_amount: number;
+            }>;
+          };
+
+          console.log(
+            `[METEORA API] Successfully fetched transactions for position ${positionAddress.slice(0, 8)}`
+          );
+          return {
+            deposits: data.deposits || [],
+            withdrawals: data.withdrawals || [],
+            fees: data.fees || [],
+          };
+        } catch (error) {
+          console.error(
+            "[METEORA API] Error fetching position transactions:",
+            error
+          );
+          throw error; // Rethrow for retry mechanism
+        }
+      },
+      5,
+      500,
+      `Fetch transactions for position ${positionAddress.slice(0, 8)}`
+    ).catch((error) => {
+      console.error(
+        `[METEORA API] Failed to fetch position transactions after retries: ${error instanceof Error ? error.message : String(error)}`
       );
       return null;
     });

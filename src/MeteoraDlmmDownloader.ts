@@ -183,14 +183,14 @@ export class MeteoraDlmmDownloader {
 
       try {
         // Smaller batch size to avoid rate limits
-        const batchSize = 100; // Reduced from 300
+        const batchSize = 300;
 
         // Add delay between transaction batch fetches
         if (batchCount > 1) {
           console.log(
-            "[DOWNLOADER] Waiting 2 seconds between batches to avoid rate limits"
+            "[DOWNLOADER] Waiting 1 second between batches to avoid rate limits"
           );
-          await new Promise((resolve) => setTimeout(resolve, 2000));
+          await new Promise((resolve) => setTimeout(resolve, 1000));
         }
 
         const signatures =

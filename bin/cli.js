@@ -184,7 +184,7 @@ async function dbDownload() {
         account: walletAddress,
         rpcUrl,
         maxTransactions: maxTransactions ? maxTransactions : undefined,
-        batchSize: 100, // Reduce batch size
+        batchSize: 300,
         callbacks: {
           onProgress: (status, current, total) => {
             const progress =

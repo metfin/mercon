@@ -40,6 +40,11 @@ export interface DatabaseInterface {
   ): Promise<void>;
   getMissingUsd(): Promise<string[]>;
 
+  // Position operations
+  getPositionTransactions(
+    positionAddress: string
+  ): Promise<MeteoraPositionTransactions | null>;
+
   // Account operations
   markComplete(accountAddress: string): Promise<void>;
   isComplete(accountAddress: string): Promise<boolean>;

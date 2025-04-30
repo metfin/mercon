@@ -986,4 +986,70 @@ export class SqliteDatabase implements DatabaseInterface {
       return result as MeteoraDlmmDbTransactions[];
     });
   }
+
+  /**
+   * Get transactions for a position
+   */
+  public async getPositionTransactions(
+    positionAddress: string
+  ): Promise<MeteoraPositionTransactions | null> {
+    try {
+      // Query for deposits
+      const deposits = await this.db.all<
+        Array<{
+          tx_id: string;
+          token_x_usd_amount: number;
+          token_y_usd_amount: number;
+        }>
+      >(
+        `SELECT signature AS tx_id, 
+          usd_deposit / 2 AS token_x_usd_amount, 
+          usd_deposit / 2 AS token_y_usd_amount 
+        FROM transactions 
+        WHERE position_address = ? AND deposit > 0`,
+        [positionAddress]
+      );
+
+      // Query for withdrawals
+      const withdrawals = await this.db.all<
+        Array<{
+          tx_id: string;
+          token_x_usd_amount: number;
+          token_y_usd_amount: number;
+        }>
+      >(
+        `SELECT signature AS tx_id, 
+          usd_withdrawal / 2 AS token_x_usd_amount, 
+          usd_withdrawal / 2 AS token_y_usd_amount 
+        FROM transactions 
+        WHERE position_address = ? AND withdrawal > 0`,
+        [positionAddress]
+      );
+
+      // Query for fees
+      const fees = await this.db.all<
+        Array<{
+          tx_id: string;
+          token_x_usd_amount: number;
+          token_y_usd_amount: number;
+        }>
+      >(
+        `SELECT signature AS tx_id, 
+          usd_fee_amount / 2 AS token_x_usd_amount, 
+          usd_fee_amount / 2 AS token_y_usd_amount 
+        FROM transactions 
+        WHERE position_address = ? AND fee_amount > 0`,
+        [positionAddress]
+      );
+
+      return {
+        deposits: deposits || [],
+        withdrawals: withdrawals || [],
+        fees: fees || [],
+      };
+    } catch (error) {
+      console.error("Error getting position transactions:", error);
+      return null;
+    }
+  }
 }
