@@ -1,9 +1,4 @@
-import type {
-  ParsedTransactionWithMeta,
-  PublicKey,
-  ParsedInstruction,
-  PartiallyDecodedInstruction,
-} from "@solana/web3.js";
+import type { ParsedTransactionWithMeta, PublicKey } from "@solana/web3.js";
 import type { TransactionData } from "../types";
 import { BorshInstructionCoder, type Idl } from "@coral-xyz/anchor";
 import { IDL } from "@meteora-ag/dlmm";
@@ -36,13 +31,6 @@ export const METEORA_RELATED_TOKENS = [
 export const METEORA_RELATED_ACCOUNTS = [
   "Eo5YeDSgnj4RZ3LFE46YHoCWxVDn2qhqQf4NTkVECN65", // Meteora fee recipient
 ];
-
-// Meteora LP position account minimum size (rough estimate)
-// This helps identify position accounts
-const MIN_POSITION_ACCOUNT_SIZE = 300;
-
-// Meteora LB pair account minimum size
-const MIN_PAIR_ACCOUNT_SIZE = 500;
 
 // Instruction types
 export type MeteoraDlmmInstructionType =
@@ -187,8 +175,7 @@ export function sortMeteoraInstructions(
  * Attempt to decode a Meteora instruction with Anchor's BorshInstructionCoder
  */
 function decodeInstruction(
-  instructionData: Buffer | string,
-  programId: string
+  instructionData: Buffer | string
 ): { name: string; data: Record<string, unknown> } | null {
   try {
     if (!instructionData) return null;
@@ -306,8 +293,7 @@ function extractAccountInfo(
     };
     accounts?: Array<number>;
     pubkeys?: Array<PublicKey>;
-  },
-  programId: string
+  }
 ): MeteoraDlmmAccounts {
   try {
     const accounts: MeteoraDlmmAccounts = {
@@ -469,7 +455,7 @@ export function extractMeteoraInstructions(
     let hasMeteora = false;
     const foundInstructions: string[] = [];
 
-    for (const { instruction, type, innerIndex } of allInstructions) {
+    for (const { instruction } of allInstructions) {
       // Get program ID
       let programId: string | null = null;
       if (instruction.programId) {
@@ -488,7 +474,7 @@ export function extractMeteoraInstructions(
 
         // If we have data, attempt to decode it
         if (instruction.data) {
-          const decoded = decodeInstruction(instruction.data, programId);
+          const decoded = decodeInstruction(instruction.data);
           if (decoded) {
             instructionName = decoded.name;
             decodedData = decoded.data;
@@ -500,11 +486,7 @@ export function extractMeteoraInstructions(
         const instructionType = INSTRUCTION_TYPE_MAP[instructionName] || "add";
 
         // Extract account information
-        const accounts = extractAccountInfo(
-          accountKeys,
-          instruction,
-          programId
-        );
+        const accounts = extractAccountInfo(accountKeys, instruction);
 
         // Extract token transfers for this transaction
         const tokenTransfers = extractTokenTransfers(transaction);
