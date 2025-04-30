@@ -337,6 +337,7 @@ export class MeteoraDlmmDownloader {
     // Process transactions in smaller batches to avoid rate limits
     const batchSize = 50;
     const totalBatches = Math.ceil(transactions.length / batchSize);
+    let meteoraTransactionsFound = 0;
 
     for (let i = 0; i < totalBatches; i++) {
       if (this.isCancelled) break;
@@ -344,10 +345,6 @@ export class MeteoraDlmmDownloader {
       const start = i * batchSize;
       const end = Math.min((i + 1) * batchSize, transactions.length);
       const batch = transactions.slice(start, end);
-
-      console.log(
-        `[DOWNLOADER] Processing instruction batch ${i + 1}/${totalBatches} (${batch.length} transactions)`
-      );
 
       // Process each transaction in the batch
       for (let j = 0; j < batch.length; j++) {
@@ -367,6 +364,7 @@ export class MeteoraDlmmDownloader {
             const instructions = extractMeteoraInstructions(fullTx);
 
             if (instructions.length > 0) {
+              meteoraTransactionsFound++;
               console.log(
                 `[DOWNLOADER] Found ${instructions.length} Meteora instructions in transaction ${tx.signature.slice(0, 8)}...`
               );
@@ -378,14 +376,14 @@ export class MeteoraDlmmDownloader {
                   signature: tx.signature,
                 });
               }
+
+              // Mark the transaction as processed - only log for Meteora-related
+              console.log(
+                `[DOWNLOADER] Would mark transaction ${tx.signature.slice(0, 8)}... as processed`
+              );
             }
           }
 
-          // Mark the transaction as processed
-          // Since markTransactionProcessed doesn't exist, we'll mock it
-          console.log(
-            `[DOWNLOADER] Would mark transaction ${tx.signature.slice(0, 8)}... as processed`
-          );
           // In a real implementation:
           // await this.db.markTransactionProcessed(tx.signature);
         } catch (error) {
@@ -404,6 +402,9 @@ export class MeteoraDlmmDownloader {
       }
     }
 
+    console.log(
+      `[DOWNLOADER] Found Meteora instructions in ${meteoraTransactionsFound} transactions`
+    );
     console.log("[DOWNLOADER] Finished processing Meteora instructions");
   }
 

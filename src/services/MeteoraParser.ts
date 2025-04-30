@@ -1,8 +1,23 @@
-import type { ParsedTransactionWithMeta, PublicKey } from "@solana/web3.js";
+import type {
+  ParsedTransactionWithMeta,
+  PublicKey,
+  ParsedInstruction,
+  PartiallyDecodedInstruction,
+} from "@solana/web3.js";
 import type { TransactionData } from "../types";
+import { BorshInstructionCoder, type Idl } from "@coral-xyz/anchor";
+import { IDL } from "@meteora-ag/dlmm";
+import bs58 from "bs58";
 
-// Constants for Meteora program ID
+// Constants for Meteora program IDs (v1 and v2)
 export const METEORA_PROGRAM_ID = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo";
+export const METEORA_PROGRAM_ID_V2 =
+  "dLMWnWVBcCD98KYSgCvTftbHZzbndhK7GhMtjJ7jAqjF";
+export const METEORA_PROGRAM_IDS = [
+  METEORA_PROGRAM_ID, // v1 mainnet
+  METEORA_PROGRAM_ID_V2, // v2 mainnet
+  "GFXsSL5xWRGWEFx3KjqR3VBSagwrwDcnwgoBqwFQxVac", // Alternative/devnet
+];
 
 // Known token programs
 export const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
@@ -11,6 +26,16 @@ export const ASSOCIATED_TOKEN_PROGRAM_ID =
 
 // SOL token address
 export const SOL_TOKEN_MINT = "So11111111111111111111111111111111111111112";
+
+// Some known Meteora-related tokens (to help identify Meteora transactions)
+export const METEORA_RELATED_TOKENS = [
+  "LBooNyXDsHPxfJzwdj8hGJy8ww32cLqiKAhh75pL5JF", // Meteora Token
+];
+
+// Some known Meteora-related accounts (to help identify Meteora transactions)
+export const METEORA_RELATED_ACCOUNTS = [
+  "Eo5YeDSgnj4RZ3LFE46YHoCWxVDn2qhqQf4NTkVECN65", // Meteora fee recipient
+];
 
 // Meteora LP position account minimum size (rough estimate)
 // This helps identify position accounts
@@ -25,7 +50,8 @@ export type MeteoraDlmmInstructionType =
   | "add"
   | "remove"
   | "claim"
-  | "close";
+  | "close"
+  | "swap";
 
 // Instruction names
 export type MeteoraDlmmInstructionName =
@@ -41,22 +67,42 @@ export type MeteoraDlmmInstructionName =
   | "removeLiquidityByRange"
   | "claimFee"
   | "closePosition"
-  | "unknownMeteora";
+  | "unknownMeteora"
+  | "swap"
+  | "swapV2";
 
 // Map of instruction names to instruction types
-const INSTRUCTION_MAP: Record<string, MeteoraDlmmInstructionType> = {
+const INSTRUCTION_TYPE_MAP: Record<string, MeteoraDlmmInstructionType> = {
+  // Position management
   initializePosition: "open",
+  initializePositionByWeight: "open",
+  initializePositionByStrategy: "open",
+
+  // Add liquidity
   addLiquidity: "add",
   addLiquidityByWeight: "add",
   addLiquidityByStrategy: "add",
   addLiquidityByStrategyOneSide: "add",
   addLiquidityOneSide: "add",
+
+  // Remove liquidity
   removeLiquidity: "remove",
   removeAllLiquidity: "remove",
   removeLiquiditySingleSide: "remove",
   removeLiquidityByRange: "remove",
+
+  // Fee claiming
   claimFee: "claim",
+  claimSwapFee: "claim",
+
+  // Close position
   closePosition: "close",
+
+  // Swaps
+  swap: "swap",
+  swapV2: "swap",
+
+  // Default fallback
   unknownMeteora: "add",
 };
 
@@ -79,19 +125,14 @@ export interface MeteoraDlmmInstruction {
   signature: string;
   slot: number;
   blockTime: number;
+  programId: string; // Added to track which version of Meteora
   instructionName: string;
   instructionType: MeteoraDlmmInstructionType;
   accounts: MeteoraDlmmAccounts;
   tokenTransfers: TokenTransferInfo[];
-  activeBinId: number | null;
-  removalBps: number | null;
-}
-
-// Define an interface for instructions
-interface InstructionWithProgramId {
-  programId: { toString(): string };
-  data?: string | Uint8Array;
-  accounts?: number[];
+  activeBinId?: number;
+  removalBps?: number;
+  decodedData?: Record<string, unknown>; // Store decoded instruction data when available
 }
 
 // Define a more specific RPC Response interface
@@ -104,6 +145,10 @@ interface RpcResponse {
     message: string;
   };
 }
+
+// Initialize instruction coder (v1 - works for both v1 and v2 as they share most instructions)
+// We need to use 'any' here because the IDL from the SDK doesn't match the Anchor Idl type exactly
+const instructionCoderV1 = new BorshInstructionCoder(IDL as unknown as Idl);
 
 /**
  * Sort Meteora instructions by time and type
@@ -139,133 +184,221 @@ export function sortMeteoraInstructions(
 }
 
 /**
- * Attempt to identify the Meteora instruction type based on token transfers
+ * Attempt to decode a Meteora instruction with Anchor's BorshInstructionCoder
  */
-function identifyInstructionType(tokenTransfers: TokenTransferInfo[]): {
-  instructionName: MeteoraDlmmInstructionName;
-  instructionType: MeteoraDlmmInstructionType;
-} {
-  // No transfers - likely an initialization
-  if (tokenTransfers.length === 0) {
-    return {
-      instructionName: "initializePosition",
-      instructionType: "open",
-    };
-  }
+function decodeInstruction(
+  instructionData: Buffer | string,
+  programId: string
+): { name: string; data: Record<string, unknown> } | null {
+  try {
+    if (!instructionData) return null;
 
-  // Get counts of transfers by direction
-  const inTransfers = tokenTransfers.filter((t) => t.direction === "in");
-  const outTransfers = tokenTransfers.filter((t) => t.direction === "out");
-  const inCount = inTransfers.length;
-  const outCount = outTransfers.length;
+    // Attempt to decode using Anchor's BorshInstructionCoder
+    const decoded = instructionCoderV1.decode(
+      typeof instructionData === "string"
+        ? Buffer.from(bs58.decode(instructionData))
+        : instructionData
+    );
 
-  // Get unique token mints involved
-  const uniqueMints = new Set(tokenTransfers.map((t) => t.mint));
-
-  // Check for SOL token (So111111...) received or sent
-  const solTransfers = tokenTransfers.filter(
-    (t) =>
-      t.mint === SOL_TOKEN_MINT ||
-      t.mint.startsWith("So111111111111111111111111111111111111111")
-  );
-  const solReceived = solTransfers.some((t) => t.direction === "in");
-  const solSent = solTransfers.some((t) => t.direction === "out");
-
-  // PATTERN: Remove liquidity - typically receive SOL without sending anything
-  if (solReceived && inCount > 0 && outCount === 0) {
-    return {
-      instructionName: "removeLiquidity",
-      instructionType: "remove",
-    };
-  }
-
-  // PATTERN: Detect token swap operations - typically same token both in and out
-  const sameMintInAndOut = [...uniqueMints].some(
-    (mint) =>
-      tokenTransfers.some((t) => t.mint === mint && t.direction === "in") &&
-      tokenTransfers.some((t) => t.mint === mint && t.direction === "out")
-  );
-
-  if (sameMintInAndOut) {
-    // If we have a token going both in and out, and SOL going out,
-    // it's likely a swap or position operation
-    if (solSent) {
+    if (decoded) {
       return {
-        instructionName: "addLiquidityByStrategy",
-        instructionType: "add",
+        name: decoded.name,
+        data: decoded.data as Record<string, unknown>,
       };
     }
 
-    // If no SOL involved, could be a claim
-    return {
-      instructionName: "claimFee",
-      instructionType: "claim",
-    };
+    return null;
+  } catch (error) {
+    console.log(`Failed to decode instruction: ${error}`);
+    return null;
   }
+}
 
-  // PATTERN: Add liquidity - typically send SOL and receive tokens
-  if (solSent && outCount > 0) {
-    return {
-      instructionName: "addLiquidity",
-      instructionType: "add",
-    };
-  }
+/**
+ * Extract token transfers from a transaction
+ */
+function extractTokenTransfers(
+  transaction: ParsedTransactionWithMeta
+): TokenTransferInfo[] {
+  try {
+    const transfers: TokenTransferInfo[] = [];
 
-  // PATTERN: Claim fees - typically receive more tokens than you send
-  if (inCount > outCount && solReceived) {
-    return {
-      instructionName: "claimFee",
-      instructionType: "claim",
-    };
-  }
+    // Check pre/post token balances to infer transfers
+    const preBalances = transaction.meta?.preTokenBalances || [];
+    const postBalances = transaction.meta?.postTokenBalances || [];
 
-  // PATTERN: Close position - typically have same token in both directions
-  // or same number of tokens in/out but with different tokens
-  if (inCount === outCount) {
-    // Check if we're transferring the same tokens in both directions
-    const inMints = new Set(inTransfers.map((t) => t.mint));
-    const outMints = new Set(outTransfers.map((t) => t.mint));
-
-    // If we have the same tokens going in and out
-    const commonMints = [...inMints].filter((mint) => outMints.has(mint));
-
-    if (commonMints.length > 0 || uniqueMints.size < tokenTransfers.length) {
-      return {
-        instructionName: "closePosition",
-        instructionType: "close",
-      };
+    if (preBalances.length === 0 && postBalances.length === 0) {
+      return [];
     }
-  }
 
-  // PATTERN: Add liquidity - only sending tokens (outbound transfers only)
-  if (outCount > 0 && inCount === 0) {
+    // Process all token accounts that exist in both pre and post balances
+    for (const post of postBalances) {
+      if (!post?.mint) continue;
+
+      const pre = preBalances.find((p) => p.accountIndex === post.accountIndex);
+
+      // If account exists in both pre and post
+      if (pre) {
+        const preAmount = Number(pre.uiTokenAmount.amount) || 0;
+        const postAmount = Number(post.uiTokenAmount.amount) || 0;
+        const diff = postAmount - preAmount;
+
+        if (Math.abs(diff) > 0.000001) {
+          // Use a small epsilon to handle floating point errors
+          transfers.push({
+            mint: post.mint,
+            amount: Math.abs(diff),
+            direction: diff > 0 ? "in" : "out",
+          });
+        }
+      } else {
+        // New token account - consider it as receiving tokens
+        const amount = Number(post.uiTokenAmount.amount) || 0;
+        if (amount > 0) {
+          transfers.push({
+            mint: post.mint,
+            amount,
+            direction: "in",
+          });
+        }
+      }
+    }
+
+    // Check for token accounts that were closed (existed in pre but not in post)
+    for (const pre of preBalances) {
+      if (!pre?.mint) continue;
+
+      const post = postBalances.find(
+        (p) => p.accountIndex === pre.accountIndex
+      );
+
+      // If account existed in pre but not in post, it was closed/emptied
+      if (!post) {
+        const amount = Number(pre.uiTokenAmount.amount) || 0;
+        if (amount > 0) {
+          transfers.push({
+            mint: pre.mint,
+            amount,
+            direction: "out",
+          });
+        }
+      }
+    }
+
+    return transfers;
+  } catch (error) {
+    console.error("Error extracting token transfers:", error);
+    return [];
+  }
+}
+
+// Define a more specific type for account keys
+type AccountKey = { pubkey?: { toString(): string } } | { toString(): string };
+
+/**
+ * Extract account information for a Meteora instruction
+ */
+function extractAccountInfo(
+  accountKeys: AccountKey[],
+  instruction: {
+    parsed?: {
+      info?: { source?: string; destination?: string; authority?: string };
+    };
+    accounts?: Array<number>;
+    pubkeys?: Array<PublicKey>;
+  },
+  programId: string
+): MeteoraDlmmAccounts {
+  try {
+    const accounts: MeteoraDlmmAccounts = {
+      position: "unknown",
+      lbPair: "unknown",
+      sender: "unknown",
+    };
+
+    // For parsed instructions
+    if (instruction.parsed?.info) {
+      const info = instruction.parsed.info;
+
+      // Source/destination for token transfers can hint at position/sender
+      if (info.source) accounts.sender = info.source;
+      if (info.destination) accounts.position = info.destination;
+
+      // Authority is often the sender
+      if (info.authority) accounts.sender = info.authority;
+    }
+
+    // For raw instructions with account indexes
+    if (instruction.accounts) {
+      // Try to get sender (usually first account)
+      if (instruction.accounts.length > 0) {
+        const senderIndex = instruction.accounts[0];
+        const sender =
+          senderIndex !== undefined ? accountKeys[senderIndex] : undefined;
+        if (sender) {
+          if ("pubkey" in sender && sender.pubkey) {
+            accounts.sender = sender.pubkey.toString();
+          } else {
+            accounts.sender = sender.toString();
+          }
+        }
+      }
+
+      // Position is typically the 2nd account for position operations
+      if (instruction.accounts.length > 1) {
+        const posIndex = instruction.accounts[1];
+        const position =
+          posIndex !== undefined ? accountKeys[posIndex] : undefined;
+        if (position) {
+          if ("pubkey" in position && position.pubkey) {
+            accounts.position = position.pubkey.toString();
+          } else {
+            accounts.position = position.toString();
+          }
+        }
+      }
+
+      // LB Pair is typically the 3rd account
+      if (instruction.accounts.length > 2) {
+        const lbPairIndex = instruction.accounts[2];
+        const lbPair =
+          lbPairIndex !== undefined ? accountKeys[lbPairIndex] : undefined;
+        if (lbPair) {
+          if ("pubkey" in lbPair && lbPair.pubkey) {
+            accounts.lbPair = lbPair.pubkey.toString();
+          } else {
+            accounts.lbPair = lbPair.toString();
+          }
+        }
+      }
+    }
+    // For raw instructions with PublicKey arrays (PartiallyDecodedInstruction)
+    else if (instruction.pubkeys) {
+      // Try to get sender (usually first account)
+      if (instruction.pubkeys.length > 0 && instruction.pubkeys[0]) {
+        accounts.sender = instruction.pubkeys[0].toString();
+      }
+
+      // Position is typically the 2nd account for position operations
+      if (instruction.pubkeys.length > 1 && instruction.pubkeys[1]) {
+        accounts.position = instruction.pubkeys[1].toString();
+      }
+
+      // LB Pair is typically the 3rd account
+      if (instruction.pubkeys.length > 2 && instruction.pubkeys[2]) {
+        accounts.lbPair = instruction.pubkeys[2].toString();
+      }
+    }
+
+    return accounts;
+  } catch (error) {
+    console.error("Error extracting account info:", error);
     return {
-      instructionName: "addLiquidity",
-      instructionType: "add",
+      position: "error",
+      lbPair: "error",
+      sender: "error",
     };
   }
-
-  // PATTERN: Add liquidity with one-sided strategy
-  if (uniqueMints.size === 1 && outCount === 1) {
-    return {
-      instructionName: "addLiquidityOneSide",
-      instructionType: "add",
-    };
-  }
-
-  // If we're sending and receiving tokens and can't match other patterns
-  if (inCount > 0 && outCount > 0) {
-    return {
-      instructionName: "addLiquidityByStrategy",
-      instructionType: "add",
-    };
-  }
-
-  // Default to add liquidity if we can't determine a more specific type
-  return {
-    instructionName: "addLiquidity",
-    instructionType: "add",
-  };
 }
 
 /**
@@ -275,246 +408,230 @@ export function extractMeteoraInstructions(
   transaction: ParsedTransactionWithMeta
 ): MeteoraDlmmInstruction[] {
   try {
-    console.log(
-      `==== Analyzing transaction: ${transaction.transaction.signatures[0]?.slice(0, 8)} ====`
-    );
+    const txSignature =
+      transaction.transaction.signatures[0]?.slice(0, 8) || "unknown";
 
     if (!transaction.blockTime) {
-      console.log("Skipping: No blockTime");
       return [];
     }
 
-    // Log some basic info about the transaction
-    console.log(
-      `Block time: ${new Date(transaction.blockTime * 1000).toISOString()}`
-    );
-    console.log(`Signatures: ${transaction.transaction.signatures.join(", ")}`);
-    console.log(
-      `Account keys count: ${transaction.transaction.message.accountKeys.length}`
-    );
+    // Track all Meteora instructions found
+    const meteoraInstructions: MeteoraDlmmInstruction[] = [];
+    // Account keys from the transaction
+    const accountKeys = transaction.transaction.message.accountKeys;
 
-    // Check if transaction is from Meteora program
-    let hasMeteora = false;
-
-    // Log all program IDs involved
-    console.log("Programs in transaction:");
-    const programIds = new Set<string>();
-
-    // Check in instructions
-    for (const ix of transaction.transaction.message.instructions) {
-      if ("programId" in ix) {
-        const programId = ix.programId.toString();
-        programIds.add(programId);
-
-        if (programId === METEORA_PROGRAM_ID) {
-          hasMeteora = true;
-          console.log(`✅ Found Meteora in main instructions: ${programId}`);
-        }
-      }
-    }
-
-    // If no Meteora instructions, check inner instructions
-    if (!hasMeteora && transaction.meta?.innerInstructions) {
-      console.log("Checking inner instructions:");
-      for (const innerGroup of transaction.meta.innerInstructions) {
-        for (const ix of innerGroup.instructions) {
-          if ("programId" in ix) {
-            const programId = ix.programId.toString();
-            programIds.add(programId);
-
-            if (programId === METEORA_PROGRAM_ID) {
-              hasMeteora = true;
-              console.log(
-                `✅ Found Meteora in inner instructions: ${programId}`
-              );
-            }
-          }
-        }
-      }
-    }
-
-    // Print all program IDs for debugging
-    console.log("All program IDs in transaction:");
-    for (const id of programIds) {
-      console.log(` - ${id}${id === METEORA_PROGRAM_ID ? " (METEORA)" : ""}`);
-    }
-
-    // If no Meteora program ID found, skip this transaction
-    if (!hasMeteora) {
-      console.log("❌ No Meteora program found in transaction, skipping");
-      return [];
-    }
-
-    // Log token balances if present
-    if (
-      transaction.meta?.preTokenBalances &&
-      transaction.meta?.postTokenBalances
-    ) {
-      console.log("Token balances found:");
-      console.log(
-        `Pre token balances: ${transaction.meta.preTokenBalances.length}`
-      );
-      console.log(
-        `Post token balances: ${transaction.meta.postTokenBalances.length}`
-      );
-    } else {
-      console.log("No token balances found");
-    }
-
-    // Extract token transfers
-    const tokenTransfers = extractTokenTransfers(transaction, 0);
-    console.log(`Token transfers detected: ${tokenTransfers.length}`);
-
-    for (const transfer of tokenTransfers) {
-      console.log(
-        ` - Mint: ${transfer.mint.slice(0, 8)}... Amount: ${transfer.amount} Direction: ${transfer.direction}`
-      );
-    }
-
-    // If we have Meteora and token transfers, create a simplified instruction
-    const signature = transaction.transaction.signatures[0] || "";
-
-    // Try to identify instruction type based on token transfers
-    const { instructionName, instructionType } =
-      identifyInstructionType(tokenTransfers);
-    console.log(
-      `Identified instruction: ${instructionName} (${instructionType})`
-    );
-
-    // Create a simplified instruction with detected info
-    const instruction: MeteoraDlmmInstruction = {
-      signature,
-      slot: transaction.slot,
-      blockTime: transaction.blockTime,
-      instructionName,
-      // Get instructionType from the map if available, otherwise use the one from identification
-      instructionType: INSTRUCTION_MAP[instructionName] || instructionType,
-      accounts: {
-        // We won't try to be too precise about position/pair/sender for now
-        position: "detected",
-        lbPair: "detected",
-        sender: "detected",
-      },
-      tokenTransfers,
-      activeBinId: null,
-      removalBps: null,
+    // Define a generic instruction type that works for both parsed and partially decoded
+    type GenericInstruction = {
+      programId?: { toString(): string };
+      program?: string;
+      data?: Buffer | string;
+      accounts?: Array<number>;
+      pubkeys?: Array<PublicKey>;
+      parsed?: { type?: string; info?: Record<string, unknown> };
     };
 
-    console.log(`Created instruction: ${JSON.stringify(instruction, null, 2)}`);
-    return [instruction];
-  } catch (error) {
-    console.error("Error parsing Meteora instructions:", error);
-    return [];
-  }
-}
+    // Entry in our instructions array
+    type InstructionEntry = {
+      instruction: GenericInstruction;
+      type: "main" | "inner";
+      innerIndex?: number;
+    };
 
-/**
- * Extract token transfers from a transaction
- */
-function extractTokenTransfers(
-  transaction: ParsedTransactionWithMeta,
-  instructionIndex: number
-): TokenTransferInfo[] {
-  try {
-    const transfers: TokenTransferInfo[] = [];
+    const allInstructions: InstructionEntry[] = [];
 
-    // Check pre/post token balances to infer transfers
-    const preBalances = transaction.meta?.preTokenBalances || [];
-    const postBalances = transaction.meta?.postTokenBalances || [];
+    // Add main instructions
+    for (const ix of transaction.transaction.message.instructions) {
+      // Convert to our generic instruction interface
+      allInstructions.push({
+        instruction: ix as unknown as GenericInstruction,
+        type: "main",
+      });
+    }
 
-    console.log(
-      `Analyzing token transfers: Pre: ${preBalances.length}, Post: ${postBalances.length}`
-    );
+    // Add inner instructions
+    if (transaction.meta?.innerInstructions) {
+      for (const [
+        groupIndex,
+        innerGroup,
+      ] of transaction.meta.innerInstructions.entries()) {
+        for (const ix of innerGroup.instructions) {
+          // Convert to our generic instruction interface
+          allInstructions.push({
+            instruction: ix as unknown as GenericInstruction,
+            type: "inner",
+            innerIndex: groupIndex,
+          });
+        }
+      }
+    }
 
-    // First find all new token accounts (those that appear in post but not pre)
-    const newAccounts = postBalances.filter(
-      (post) =>
-        !preBalances.some((pre) => pre.accountIndex === post.accountIndex)
-    );
+    // Look for Meteora program IDs in all instructions
+    let hasMeteora = false;
+    const foundInstructions: string[] = [];
 
-    if (newAccounts.length > 0) {
-      console.log(`  Found ${newAccounts.length} newly created token accounts`);
+    for (const { instruction, type, innerIndex } of allInstructions) {
+      // Get program ID
+      let programId: string | null = null;
+      if (instruction.programId) {
+        programId = instruction.programId.toString();
+      } else if (instruction.program === "spl-token") {
+        programId = TOKEN_PROGRAM_ID;
+      }
 
-      // For new accounts, consider them as receiving tokens
-      for (const newAccount of newAccounts) {
-        if (newAccount?.mint) {
-          const amount = Number(newAccount.uiTokenAmount.amount) || 0;
-          if (amount > 0) {
-            transfers.push({
-              mint: newAccount.mint,
-              amount,
-              direction: "in",
-            });
-            console.log(
-              `  ✅ Added transfer for new account: IN ${amount} of ${newAccount.mint.slice(0, 8)}...`
-            );
+      // Check if it's a Meteora program
+      if (programId && METEORA_PROGRAM_IDS.includes(programId)) {
+        hasMeteora = true;
+
+        // Try to decode the instruction
+        let instructionName = "unknownMeteora";
+        let decodedData: Record<string, unknown> | null = null;
+
+        // If we have data, attempt to decode it
+        if (instruction.data) {
+          const decoded = decodeInstruction(instruction.data, programId);
+          if (decoded) {
+            instructionName = decoded.name;
+            decodedData = decoded.data;
+            foundInstructions.push(instructionName);
           }
         }
+
+        // Get instruction type from the map
+        const instructionType = INSTRUCTION_TYPE_MAP[instructionName] || "add";
+
+        // Extract account information
+        const accounts = extractAccountInfo(
+          accountKeys,
+          instruction,
+          programId
+        );
+
+        // Extract token transfers for this transaction
+        const tokenTransfers = extractTokenTransfers(transaction);
+
+        // Create the instruction object with optional fields properly typed
+        const meteoraInstruction: MeteoraDlmmInstruction = {
+          signature: transaction.transaction.signatures[0] || "",
+          slot: transaction.slot,
+          blockTime: transaction.blockTime,
+          programId,
+          instructionName,
+          instructionType,
+          accounts,
+          tokenTransfers,
+          // Only include optional fields if they have values
+          ...(decodedData ? { decodedData } : {}),
+        };
+
+        meteoraInstructions.push(meteoraInstruction);
       }
     }
 
-    // Process all post balances with matching pre balances
-    for (let i = 0; i < postBalances.length; i++) {
-      const post = postBalances[i];
-      if (!post) {
-        console.log(`  Skipping undefined post balance at index ${i}`);
-        continue;
-      }
+    // If no Meteora program found, try to infer from token transfers and accounts
+    if (!hasMeteora) {
+      // Extract token transfers
+      const tokenTransfers = extractTokenTransfers(transaction);
 
-      const pre = preBalances.find((b) => b.accountIndex === post.accountIndex);
-      console.log(
-        `  Account ${post.accountIndex}: ${pre ? "Found" : "Not found"} matching pre-balance`
+      // Save all account keys for analysis
+      const allAccountKeys = transaction.transaction.message.accountKeys.map(
+        (key) => (key.pubkey ? key.pubkey.toString() : key.toString())
       );
 
-      // Skip if we've already handled this as a new account
-      if (!pre) {
-        console.log(
-          "  Already processed as new account or missing pre balance, skipping"
-        );
-        continue;
-      }
+      // Check if any known Meteora accounts are involved
+      const hasMeteoraDependentAccounts = allAccountKeys.some((key) =>
+        METEORA_RELATED_ACCOUNTS.includes(key)
+      );
 
-      if (pre && post.mint) {
-        const preAmount = Number(pre.uiTokenAmount.amount) || 0;
-        const postAmount = Number(post.uiTokenAmount.amount) || 0;
-        const diff = postAmount - preAmount;
+      // Check if any known Meteora tokens are involved
+      const hasMeteoraDependentTokens = tokenTransfers.some((t) =>
+        METEORA_RELATED_TOKENS.includes(t.mint)
+      );
 
-        console.log(
-          `  Mint: ${post.mint.slice(0, 8)}..., Pre: ${preAmount}, Post: ${postAmount}, Diff: ${diff}`
-        );
+      // If we have SOL token or specific patterns of transfers, it could be a Meteora-related transaction
+      const hasSolTransfers = tokenTransfers.some(
+        (t) =>
+          t.mint === SOL_TOKEN_MINT ||
+          t.mint.startsWith("So111111111111111111111111111111111111111")
+      );
 
-        if (diff !== 0) {
-          transfers.push({
-            mint: post.mint,
-            amount: Math.abs(diff),
-            direction: diff > 0 ? "in" : "out",
-          });
-          console.log(
-            `  ✅ Added transfer: ${diff > 0 ? "IN" : "OUT"} ${Math.abs(diff)} of ${post.mint.slice(0, 8)}...`
-          );
-        } else {
-          console.log("  No change in balance, skipping");
+      // Check for pairs of token transfers (common in swaps)
+      const uniqueMints = new Set(tokenTransfers.map((t) => t.mint)).size;
+      const hasMultipleTokens = uniqueMints > 1;
+
+      if (
+        (hasMeteoraDependentAccounts ||
+          hasMeteoraDependentTokens ||
+          hasSolTransfers ||
+          hasMultipleTokens) &&
+        tokenTransfers.length > 0
+      ) {
+        // Determine if this looks like a swap, add, or remove liquidity
+        let instructionType: MeteoraDlmmInstructionType = "add";
+        let instructionName = "unknownMeteora";
+
+        // Infer the instruction type from token transfer patterns
+        const inTokens = tokenTransfers.filter((t) => t.direction === "in");
+        const outTokens = tokenTransfers.filter((t) => t.direction === "out");
+
+        if (inTokens.length === 1 && outTokens.length === 1) {
+          // One token in, one token out - likely a swap
+          instructionType = "swap";
+          instructionName = "swap";
+        } else if (outTokens.length > 0 && inTokens.length === 0) {
+          // Only tokens going out - adding liquidity
+          instructionType = "add";
+          instructionName = "addLiquidity";
+        } else if (inTokens.length > 0 && outTokens.length === 0) {
+          // Only tokens coming in - removing liquidity or claiming fees
+          instructionType = "remove";
+          instructionName = "removeLiquidity";
         }
-      } else {
-        console.log("  Missing mint, skipping");
+
+        // Default to v2 if we detect it might be a Meteora transaction but don't know which version
+        const detectedProgramId =
+          hasMeteoraDependentAccounts || hasMeteoraDependentTokens
+            ? METEORA_PROGRAM_ID_V2 // Prefer V2 for newer transactions
+            : METEORA_PROGRAM_ID; // Default to V1 otherwise
+
+        foundInstructions.push(`Inferred ${instructionName}`);
+
+        // Create a Meteora instruction with the inferred type
+        const meteoraInstruction: MeteoraDlmmInstruction = {
+          signature: transaction.transaction.signatures[0] || "",
+          slot: transaction.slot,
+          blockTime: transaction.blockTime,
+          programId: detectedProgramId,
+          instructionName,
+          instructionType,
+          accounts: {
+            position: "inferred",
+            lbPair: "inferred",
+            sender: "inferred",
+          },
+          tokenTransfers,
+        };
+
+        meteoraInstructions.push(meteoraInstruction);
       }
     }
 
-    // Try to create pairs for each token (often in Meteora, tokens are swapped in pairs)
-    const transfersByMint = new Map<string, TokenTransferInfo[]>();
-
-    // Group transfers by mint
-    for (const transfer of transfers) {
-      if (!transfersByMint.has(transfer.mint)) {
-        transfersByMint.set(transfer.mint, []);
+    // Only log if we found Meteora instructions
+    if (meteoraInstructions.length > 0) {
+      // Log each unique instruction found
+      if (foundInstructions.length > 0) {
+        for (const instruction of foundInstructions) {
+          console.log(`${txSignature}: ${instruction}`);
+        }
       }
-      transfersByMint.get(transfer.mint)?.push(transfer);
+
+      console.log(
+        `${txSignature}: Found ${meteoraInstructions.length} Meteora instructions`
+      );
     }
 
-    console.log(`Total transfers detected: ${transfers.length}`);
-    return transfers;
+    return meteoraInstructions;
   } catch (error) {
-    console.error("Error extracting token transfers:", error);
+    console.error("Error parsing Meteora instructions:", error);
     return [];
   }
 }
@@ -529,25 +646,21 @@ export function processMeteoraTransactions(
   return new Promise((resolve) => {
     const meteoraInstructions: MeteoraDlmmInstruction[] = [];
     let processed = 0;
+    let meteoraTransactions = 0;
 
     console.log(
-      `Starting to process ${transactions.length} transactions for Meteora operations`
+      `Processing ${transactions.length} transactions for Meteora operations`
     );
 
     // Process transactions in batches of 20
     const batchSize = 20;
     const batches = Math.ceil(transactions.length / batchSize);
-    console.log(`Processing in ${batches} batches of ${batchSize}`);
 
     const processNextBatch = async (batchIndex: number) => {
       if (batchIndex >= batches) {
         console.log(
-          `✅ Completed processing all ${transactions.length} transactions`
+          `Found ${meteoraInstructions.length} Meteora instructions in ${meteoraTransactions} transactions`
         );
-        console.log(
-          `✅ Found ${meteoraInstructions.length} Meteora instructions`
-        );
-        console.log("Instruction types:");
 
         // Count by instruction type
         const counts: Record<MeteoraDlmmInstructionType, number> = {
@@ -556,17 +669,22 @@ export function processMeteoraTransactions(
           remove: 0,
           claim: 0,
           close: 0,
+          swap: 0,
         };
 
         for (const ix of meteoraInstructions) {
-          counts[ix.instructionType]++;
+          counts[ix.instructionType] = (counts[ix.instructionType] || 0) + 1;
         }
 
-        console.log(` - Open: ${counts.open}`);
-        console.log(` - Add: ${counts.add}`);
-        console.log(` - Remove: ${counts.remove}`);
-        console.log(` - Claim: ${counts.claim}`);
-        console.log(` - Close: ${counts.close}`);
+        // Only log the counts if we found instructions
+        if (meteoraInstructions.length > 0) {
+          console.log("Instruction types:");
+          for (const [type, count] of Object.entries(counts)) {
+            if (count > 0) {
+              console.log(` - ${type}: ${count}`);
+            }
+          }
+        }
 
         if (onProgress) {
           onProgress(
@@ -582,16 +700,16 @@ export function processMeteoraTransactions(
       const start = batchIndex * batchSize;
       const end = Math.min(start + batchSize, transactions.length);
       const batch = transactions.slice(start, end);
-      console.log(
-        `Processing batch ${batchIndex + 1}/${batches} (Transactions ${start}-${end - 1})`
-      );
+
+      if ((batchIndex + 1) % 5 === 0) {
+        console.log(
+          `Progress: ${Math.round(((batchIndex + 1) / batches) * 100)}%`
+        );
+      }
 
       // Process each transaction in the batch
       for (const tx of batch) {
         try {
-          console.log(
-            `Fetching transaction ${tx.signature.slice(0, 8)}... (${processed + 1}/${transactions.length})`
-          );
           const response = await fetch("https://api.mainnet-beta.solana.com", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -609,34 +727,32 @@ export function processMeteoraTransactions(
           const jsonResponse = (await response.json()) as RpcResponse;
 
           if (jsonResponse.result) {
-            console.log(
-              `Successfully fetched transaction ${tx.signature.slice(0, 8)}...`
-            );
             const instructions = extractMeteoraInstructions(
               jsonResponse.result
             );
 
             if (instructions.length > 0) {
-              console.log(
-                `✅ Found ${instructions.length} Meteora instructions in transaction ${tx.signature.slice(0, 8)}...`
-              );
+              meteoraTransactions++;
               meteoraInstructions.push(...instructions);
-            } else {
-              console.log(
-                `❌ No Meteora instructions found in transaction ${tx.signature.slice(0, 8)}...`
-              );
             }
-          } else {
+          } else if (
+            jsonResponse.error?.code &&
+            jsonResponse.error.code !== -32602
+          ) {
+            // Only log serious errors (not just transaction not found)
             console.log(
-              `❌ Failed to fetch transaction ${tx.signature.slice(0, 8)}... Error: ${jsonResponse.error?.message || "Unknown error"}`
+              `Error (${tx.signature.slice(0, 8)}): ${jsonResponse.error.message}`
             );
           }
         } catch (error) {
-          console.error(`Error processing transaction ${tx.signature}:`, error);
+          console.error(
+            `Error processing transaction ${tx.signature.slice(0, 8)}:`,
+            error
+          );
         }
 
         processed++;
-        if (processed % 10 === 0 && onProgress) {
+        if (processed % 20 === 0 && onProgress) {
           onProgress(
             "Processing Meteora transactions",
             processed,

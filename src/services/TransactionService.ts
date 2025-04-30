@@ -127,9 +127,7 @@ export class TransactionService {
   public async getTransaction(
     signature: string
   ): Promise<ParsedTransactionWithMeta | null> {
-    console.log(
-      `[TRANSACTION] Fetching single transaction ${signature.slice(0, 8)}...`
-    );
+    // No logging of individual transactions
 
     return this.withRetry(
       async () => {
@@ -137,9 +135,7 @@ export class TransactionService {
           const result = await this.connection.getParsedTransaction(signature, {
             maxSupportedTransactionVersion: 0,
           });
-          console.log(
-            `[TRANSACTION] Fetched transaction ${signature.slice(0, 8)}...`
-          );
+          // No logging of fetched transactions
           return result;
         } catch (error) {
           console.error(`Error fetching transaction ${signature}:`, error);
