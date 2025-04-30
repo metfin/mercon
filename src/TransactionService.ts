@@ -72,6 +72,14 @@ export class TransactionService {
   }
 
   /**
+   * Helper to throttle requests to avoid rate limits
+   * @param ms Time to wait in milliseconds
+   */
+  private async delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
    * Fetch transaction signatures for the wallet
    * @param limit Maximum number of signatures to fetch
    * @param before Optional signature to fetch transactions before
@@ -121,40 +129,6 @@ export class TransactionService {
   }
 
   /**
-   * Fetch transaction details for a given signature
-   * @param signature Transaction signature
-   */
-  public async getTransaction(
-    signature: string
-  ): Promise<ParsedTransactionWithMeta | null> {
-    console.log(
-      `[TRANSACTION] Fetching single transaction ${signature.slice(0, 8)}...`
-    );
-
-    return this.withRetry(
-      async () => {
-        try {
-          const result = await this.connection.getParsedTransaction(signature, {
-            maxSupportedTransactionVersion: 0,
-          });
-          console.log(
-            `[TRANSACTION] Fetched transaction ${signature.slice(0, 8)}...`
-          );
-          return result;
-        } catch (error) {
-          console.error(`Error fetching transaction ${signature}:`, error);
-          throw new Error(
-            `Failed to fetch transaction ${signature}: ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-      },
-      5,
-      1000,
-      `Transaction fetch ${signature.slice(0, 8)}...`
-    );
-  }
-
-  /**
    * Fetch all signatures first, then process transactions in batches with progress updates
    * @param batchSize Size of each processing batch (max 300 due to RPC limitations)
    * @param onProgress Callback for progress updates
@@ -172,6 +146,9 @@ export class TransactionService {
 
     while (hasMore) {
       const signatures = await this.getTransactionSignatures(1000, before);
+
+      // Add delay between signature fetches to avoid rate limits
+      await this.delay(500);
 
       if (signatures.length === 0) {
         hasMore = false;
@@ -213,105 +190,14 @@ export class TransactionService {
 
       const batchTransactions = await this.getTransactions(batchSignatures);
       transactions.push(...batchTransactions);
+
+      // Add delay between transaction batch fetches
+      await this.delay(1000);
     }
 
     onProgress?.("Completed", totalBatches, totalBatches);
 
     return transactions;
-  }
-
-  /**
-   * Fetch multiple transactions and process them
-   * @param signatures List of transaction signatures
-   */
-  public async getTransactions(
-    signatures: string[]
-  ): Promise<TransactionData[]> {
-    console.log(
-      `[TRANSACTIONS] Fetching batch of ${signatures.length} transactions`
-    );
-
-    return this.withRetry(
-      async () => {
-        const transactions: TransactionData[] = [];
-
-        try {
-          // Create batch requests using the RPC endpoint directly
-          const requests = signatures.map((signature, i) => ({
-            method: "getTransaction",
-            params: [
-              signature,
-              { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 },
-            ],
-            id: `${i}`,
-            jsonrpc: "2.0",
-          }));
-
-          // Get the RPC endpoint from the connection
-          const rpcUrl = this.connection.rpcEndpoint;
-
-          console.log(
-            `[TRANSACTIONS] Sending batch request to ${rpcUrl} for ${requests.length} transactions`
-          );
-
-          // Send the batch request
-          const response = await fetch(rpcUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(requests),
-          });
-
-          if (!response.ok) {
-            console.error(
-              `[TRANSACTIONS] HTTP error: ${response.status} ${response.statusText}`
-            );
-            throw new Error(
-              `HTTP error: ${response.status} ${response.statusText}`
-            );
-          }
-
-          const results = await response.json();
-          console.log(
-            `[TRANSACTIONS] Received response for ${Array.isArray(results) ? results.length : 0} transactions`
-          );
-
-          // Process results
-          if (Array.isArray(results)) {
-            for (let i = 0; i < results.length; i++) {
-              const result = results[i];
-              const signature = signatures[i];
-
-              if (signature && result && result.result) {
-                const tx = result.result;
-                if (tx?.blockTime) {
-                  transactions.push({
-                    signature,
-                    timestamp: tx.blockTime * 1000, // Convert to milliseconds
-                    blockTime: tx.blockTime,
-                    slot: tx.slot,
-                    status: tx.meta?.err ? "failed" : "success",
-                  });
-                }
-              }
-            }
-          }
-
-          console.log(
-            `[TRANSACTIONS] Successfully processed ${transactions.length} transactions`
-          );
-        } catch (error) {
-          console.error(
-            `[TRANSACTIONS] Error processing batch transactions: ${error instanceof Error ? error.message : String(error)}`
-          );
-          throw error; // Rethrow to allow retry mechanism to catch it
-        }
-
-        return transactions;
-      },
-      5,
-      1000,
-      "Transaction batch"
-    );
   }
 
   /**
@@ -347,6 +233,9 @@ export class TransactionService {
         before,
         until
       );
+
+      // Add delay between signature requests
+      await this.delay(500);
 
       if (signatures.length === 0) {
         hasMore = false;
@@ -393,6 +282,9 @@ export class TransactionService {
 
       const batchTransactions = await this.getTransactions(batchSignatures);
 
+      // Add delay between transaction batch processing
+      await this.delay(1000);
+
       // Process the transactions to find Meteora instructions
       const batchFullTransactions = await Promise.all(
         batchSignatures.map(async (signature) => {
@@ -421,6 +313,9 @@ export class TransactionService {
       if (onTransactionProcessed) {
         onTransactionProcessed(batchTransactions, batchMeteoraInstructions);
       }
+
+      // Add delay between batches
+      await this.delay(1000);
     }
 
     onProgress?.("Completed", totalBatches, totalBatches);
@@ -445,6 +340,9 @@ export class TransactionService {
     while (keepFetching) {
       const signatures = await this.getTransactionSignatures(batchSize, before);
 
+      // Add delay between signature batches
+      await this.delay(500);
+
       if (signatures.length === 0) {
         keepFetching = false;
         break;
@@ -452,6 +350,9 @@ export class TransactionService {
 
       const signatureStrings = signatures.map((sig) => sig.signature);
       const transactions = await this.getTransactions(signatureStrings);
+
+      // Add delay between transaction batches
+      await this.delay(1000);
 
       allTransactions = [...allTransactions, ...transactions];
       fetchedCount += signatures.length;

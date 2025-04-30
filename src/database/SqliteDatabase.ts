@@ -908,6 +908,54 @@ export class SqliteDatabase implements DatabaseInterface {
   }
 
   /**
+   * Add a transaction to the database
+   */
+  async addTransaction(transaction: {
+    signature: string;
+    owner: string;
+    timestamp: string;
+    slot: number;
+  }): Promise<void> {
+    if (!this.db) throw new Error("Database not initialized");
+
+    // Store a reference to the db so TypeScript knows it's not null in the callback
+    const db = this.db;
+
+    return this.queueOperation(async () => {
+      // Convert timestamp to a block_time (Unix timestamp)
+      const blockTime = Math.floor(
+        new Date(transaction.timestamp).getTime() / 1000
+      );
+
+      // Add a basic transaction record
+      // This will be enriched later when processing instructions
+      db.exec(`
+        INSERT OR IGNORE INTO instructions (
+          signature,
+          slot,
+          is_hawksight,
+          block_time,
+          instruction_name,
+          instruction_type,
+          position_address,
+          pair_address,
+          owner_address
+        ) VALUES (
+          '${transaction.signature}',
+          ${transaction.slot},
+          0,
+          ${blockTime},
+          'transaction_record',
+          'transaction',
+          '${transaction.owner}',
+          '',
+          '${transaction.owner}'
+        )
+      `);
+    });
+  }
+
+  /**
    * Get all transactions from the database
    */
   async getAllTransactions(): Promise<MeteoraDlmmDbTransactions[]> {
