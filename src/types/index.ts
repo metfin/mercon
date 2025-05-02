@@ -19,10 +19,10 @@ export interface DataDownloaderConfig {
 // Transaction data structure
 export interface TransactionData {
   signature: string;
-  timestamp: number;
-  blockTime: number;
   slot: number;
-  status: "success" | "failed";
+  blockTime: number;
+  data: unknown; // Raw transaction data
+  parsed?: unknown; // Parsed transaction data (optional)
 }
 
 // Meteora data structure
