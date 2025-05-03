@@ -12,7 +12,6 @@ import {
   type MeteoraDlmmInstruction,
 } from "./services/MeteoraParser";
 import type { MeteoraDlmmPairData } from "./types/meteora";
-import type { MeteoraPositionTransactions } from "./services/MeteoraService";
 
 export class DataDownloader {
   private config: Config;
@@ -146,7 +145,7 @@ export class DataDownloader {
           await this.db.addTransaction({
             signature: tx.signature,
             owner: this.config.getWalletAddress(),
-            timestamp: new Date(tx.timestamp * 1000).toISOString(),
+            timestamp: new Date(tx.blockTime * 1000).toISOString(),
             slot: tx.slot,
           });
         }
@@ -486,7 +485,7 @@ export class DataDownloader {
       };
 
       // Add pair data to database
-      await this.db.addPair(mappedPairData);
+      await this.db.addPair(mappedPairData as unknown as MeteoraDlmmPairData);
 
       // Also process the token data for this pair
       if (mintX) {

@@ -242,7 +242,7 @@ export class MeteoraDlmmDownloader {
               await this.db.addTransaction({
                 signature: tx.signature,
                 owner: this.config.account,
-                timestamp: new Date(tx.timestamp).toISOString(),
+                timestamp: new Date(tx.blockTime * 1000).toISOString(),
                 slot: tx.slot,
               });
             }
@@ -494,12 +494,22 @@ export class MeteoraDlmmDownloader {
 
         if (pair) {
           await this.db.addPair({
-            lbPair: pair.address,
-            name: pair.name,
-            mintX: pair.mint_x,
-            mintY: pair.mint_y,
-            binStep: pair.bin_step,
-            baseFeeBps: Number.parseInt(pair.base_fee_percentage),
+            pairAddress: pair.address,
+            token0: {
+              mint: pair.mint_x,
+              symbol: pair.name,
+              name: pair.name,
+              decimals: 9,
+            },
+            token1: {
+              mint: pair.mint_y,
+              symbol: pair.name,
+              name: pair.name,
+              decimals: 9,
+            },
+            fee: 0,
+            tickSpacing: pair.bin_step,
+            activeId: pair.active_bin_id,
           });
         }
 
