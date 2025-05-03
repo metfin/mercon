@@ -19,7 +19,11 @@ func main() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	s := scraper.NewScraper(db)
+	s, err := scraper.NewScraper(db)
+	if err != nil {
+		log.Fatalf("Failed to initialize scraper: %v", err)
+	}
+
 	if err := s.Run(); err != nil {
 		log.Fatalf("Scraper failed: %v", err)
 	}
