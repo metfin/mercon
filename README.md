@@ -1,127 +1,61 @@
 # Mercon
 
-An all in one library for downloading data related to Meteora Transactions, Positions and Pools. Inspired by [@GeekLad's](https://github.com/GeekLad) [meteora-dlmm-db](https://github.com/GeekLad/meteora-dlmm-db).
+Mercon is a data scraper application written in Go that collects data from various sources and stores it in a PostgreSQL database.
 
+## Project Structure
 
-## Features
-
-- Fetch transaction history for a Solana wallet
-- Retrieve Meteora liquidity pool data and positions
-- Get token price information
-- Progress tracking and callbacks
-
-## Installation
-
-```bash
-# Using npm
-npm install mercon
+```
+mercon/
+├── cmd/
+│   └── mercon/          # Application entrypoint
+│       └── main.go
+├── internal/            # Internal packages
+│   ├── database/        # Database connection and operations
+│   ├── models/          # Database models
+│   └── scraper/         # Scraping logic
+├── .env.example         # Example environment variables
+├── go.mod               # Go module file
+├── go.sum               # Go dependencies checksums
+└── README.md            # This file
 ```
 
-```bash
-# Using yarn
-yarn add mercon
-```
+## Prerequisites
 
-```bash
-# Using bun
-bun add mercon
-```
+- Go 1.20 or higher
+- PostgreSQL database
+- Git
 
-## Quick Start
+## Setup
 
-```typescript
-import { DataDownloader } from 'mercon';
+1. Clone the repository:
+   ```
+   git clone https://github.com/yourusername/mercon.git
+   cd mercon
+   ```
 
-// Configure the data downloader
-const downloader = new DataDownloader({
-  walletAddress: 'YOUR_WALLET_ADDRESS', // Solana public key
-  rpcUrl: 'https://api.mainnet-beta.solana.com', // Or your preferred RPC
-  callbacks: {
-    onProgress: (progress, message) => {
-      console.log(`${progress}% - ${message}`);
-    },
-    onDone: (data) => {
-      console.log('Download completed!', data);
-    },
-    onError: (error) => {
-      console.error('Error:', error);
-    }
-  }
-});
+2. Install dependencies:
+   ```
+   go mod download
+   ```
 
-// Start downloading data (limit to 100 transactions)
-downloader.download(100)
-  .then(data => {
-    console.log(`Downloaded ${data.transactions?.length} transactions`);
-  })
-  .catch(error => {
-    console.error('Download failed:', error);
-  });
-```
+3. Set up environment variables:
+   ```
+   cp .env.example .env
+   ```
+   Edit the `.env` file with your database credentials and other configurations.
 
-## Configuration
-
-The `DataDownloader` accepts a configuration object with the following properties:
-
-```typescript
-interface DataDownloaderConfig {
-  walletAddress: string;      // Solana public key as string
-  rpcUrl: string;             // RPC URL for Solana connection
-  callbacks: {
-    onDone?: (data: DownloadedData) => void;
-    onProgress?: (progress: number, message: string) => void;
-    onError?: (error: Error) => void;
-  };
-}
-```
-
-### Using Environment Variables
-
-You can also configure the downloader using environment variables:
-
-```bash
-# Set environment variables
-export WALLET_ADDRESS=your_wallet_address
-export RPC_URL=your_rpc_url
-
-# Then in your code
-import { DataDownloader } from 'mercon';
-
-// Create using environment variables
-const downloader = DataDownloader.fromEnv();
-downloader.download();
-```
-
-## Advanced Usage
-
-For more control, you can use the individual services directly:
-
-```typescript
-import { 
-  TransactionService, 
-  MeteoraService, 
-  TokenPriceService 
-} from 'mercon';
-
-// Initialize services individually
-const txService = new TransactionService(rpcUrl, walletAddress);
-const meteoraService = new MeteoraService(walletAddress);
-const priceService = new TokenPriceService();
-
-// Fetch data using the services directly
-const transactions = await txService.fetchAllTransactions(100);
-const meteoraData = await meteoraService.fetchAllData();
-const prices = await priceService.fetchPrices(['SOL', 'USDC']);
-```
-
-## Examples
-
-Check out the examples directory for complete usage examples:
-
-- `examples/basic.ts` - Basic usage with progress tracking
-- `examples/advanced.ts` - Advanced usage with individual services
+4. Run the application:
+   ```
+   go run cmd/mercon/main.go
+   ```
 
 ## Development
+
+To add a new data source to scrape, extend the scraper package and add the appropriate models in the models package.
+
+## License
+
+See the LICENSE file for details.
 
 ```bash
 # Clone the repository
