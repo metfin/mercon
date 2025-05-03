@@ -15,12 +15,12 @@ type Position struct {
 	Owner           string `gorm:"size:44;index"`
 
 	// Fee metrics
-	FeeApr24h          float64 `gorm:"default:0"`
-	FeeApy24h          float64 `gorm:"default:0"`
-	DailyFeeYield      float64 `gorm:"default:0"`
-	TotalFeeUSDClaimed float64 `gorm:"default:0"`
-	TotalFeeXClaimed   int64   `gorm:"default:0"`
-	TotalFeeYClaimed   int64   `gorm:"default:0"`
+	FeeApr24h          *float64 `gorm:"default:0"` // Optional
+	FeeApy24h          *float64 `gorm:"default:0"` // Optional
+	DailyFeeYield      float64  `gorm:"default:0"`
+	TotalFeeUSDClaimed float64  `gorm:"default:0"`
+	TotalFeeXClaimed   int64    `gorm:"default:0"`
+	TotalFeeYClaimed   int64    `gorm:"default:0"`
 
 	// Reward metrics
 	TotalRewardUSDClaimed float64 `gorm:"default:0"`

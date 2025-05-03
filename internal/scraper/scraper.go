@@ -14,10 +14,10 @@ import (
 
 // Scraper represents the data scraping service
 type Scraper struct {
-	db            *gorm.DB
-	solanaClient  *solana.Client
-	txParser      *solana.TransactionParser
-	maxConcurrent int
+	db             *gorm.DB
+	solanaClient   *solana.Client
+	txParser       *solana.TransactionParser
+	maxConcurrent  int
 	requestTimeout time.Duration
 }
 
@@ -51,10 +51,10 @@ func NewScraper(db *gorm.DB) (*Scraper, error) {
 	txParser := solana.NewTransactionParser(db, solanaClient)
 
 	return &Scraper{
-		db:            db,
-		solanaClient:  solanaClient,
-		txParser:      txParser,
-		maxConcurrent: maxConcurrent,
+		db:             db,
+		solanaClient:   solanaClient,
+		txParser:       txParser,
+		maxConcurrent:  maxConcurrent,
 		requestTimeout: timeout,
 	}, nil
 }
@@ -82,17 +82,15 @@ func (s *Scraper) Run() error {
 		return fmt.Errorf("failed to get or create wallet: %w", result.Error)
 	}
 
-	// Get recent transactions (limit to 10 for testing)
-	txSigns, err := s.solanaClient.GetTransactionSigns(ctx, walletAddress)
+	// Get transaction signatures
+	txSigns, err := s.solanaClient.GetTransactionSigns(ctx, walletAddress, solana.Filters{})
 	if err != nil {
 		return fmt.Errorf("failed to get transactions: %w", err)
 	}
 
-
 	fmt.Printf("Found %d transactions for wallet %s\n", len(txSigns), walletAddress)
 
 	// Process transactions
-	
 
 	// Update wallet record with last scraped time
 	wallet.LastScraped = time.Now()
@@ -100,11 +98,11 @@ func (s *Scraper) Run() error {
 	if len(txSigns) > 0 {
 		wallet.LastScraped = time.Now()
 	}
-	
+
 	if err := s.db.Save(&wallet).Error; err != nil {
 		return fmt.Errorf("failed to update wallet record: %w", err)
 	}
 
 	fmt.Println("Scraping completed successfully")
 	return nil
-} 
+}

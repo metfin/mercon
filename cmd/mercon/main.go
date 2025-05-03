@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 
@@ -10,8 +11,13 @@ import (
 )
 
 func main() {
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using environment variables")
+	// Parse command-line arguments
+	envFile := flag.String("envFile", ".env", "Path to .env file")
+	flag.Parse()
+
+	// Load environment variables from the specified file
+	if err := godotenv.Load(*envFile); err != nil {
+		log.Printf("No .env file found at %s, using environment variables", *envFile)
 	}
 
 	db, err := database.Connect()
@@ -29,4 +35,4 @@ func main() {
 	}
 
 	fmt.Println("Scraping completed successfully")
-} 
+}
