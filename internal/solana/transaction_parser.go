@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/wnt/mercon/internal/models"
@@ -165,7 +166,12 @@ func (p *TransactionParser) parseInitializeLbPair(tx *models.Transaction, instru
 	fmt.Println("Parsing initializeLbPair instruction")
 
 	// Extract account addresses
-	accounts := instruction.Accounts
+	var accounts []string
+	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+	}
+
 	if len(accounts) < 13 {
 		return fmt.Errorf("not enough accounts for initializeLbPair instruction")
 	}
@@ -174,9 +180,9 @@ func (p *TransactionParser) parseInitializeLbPair(tx *models.Transaction, instru
 	pairAccount := accounts[0]
 	tokenMintX := accounts[2]
 	tokenMintY := accounts[3]
-	reserveX := accounts[4]
-	reserveY := accounts[5]
-	oracle := accounts[6]
+	_ = accounts[4] // reserveX
+	_ = accounts[5] // reserveY
+	_ = accounts[6] // oracle
 
 	// Extract instruction data
 	var activeId int32
@@ -197,8 +203,19 @@ func (p *TransactionParser) parseInitializeLbPair(tx *models.Transaction, instru
 	fmt.Printf("LB Pair Created: %s, TokenX: %s, TokenY: %s, ActiveID: %d, BinStep: %d\n",
 		pairAccount, tokenMintX, tokenMintY, activeId, binStep)
 
-	// Here you would typically save this data to your database
-	// p.db.Create(&models.MeteoraPair{...})
+	// Save to database
+	meteoraPair := &models.MeteoraPair{
+		Address:    pairAccount,
+		TokenMintX: tokenMintX,
+		TokenMintY: tokenMintY,
+		ActiveID:   activeId,
+		BinStep:    binStep,
+	}
+
+	result := p.db.Create(meteoraPair)
+	if result.Error != nil {
+		return fmt.Errorf("failed to save Meteora pair: %w", result.Error)
+	}
 
 	return nil
 }
@@ -208,20 +225,25 @@ func (p *TransactionParser) parseSwap(tx *models.Transaction, instruction models
 	fmt.Println("Parsing swap instruction")
 
 	// Extract account addresses
-	accounts := instruction.Accounts
-	if len(accounts) < 9 {
+	var accounts []string
+	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+	}
+
+	if len(accounts) < 11 {
 		return fmt.Errorf("not enough accounts for swap instruction")
 	}
 
 	// Map accounts based on the documentation
 	lbPair := accounts[0]
-	reserveX := accounts[2]
-	reserveY := accounts[3]
-	userTokenIn := accounts[4]
-	userTokenOut := accounts[5]
-	tokenXMint := accounts[6]
-	tokenYMint := accounts[7]
-	oracle := accounts[8]
+	_ = accounts[2] // reserveX
+	_ = accounts[3] // reserveY
+	_ = accounts[4] // userTokenIn
+	_ = accounts[5] // userTokenOut
+	tokenInMint := accounts[6]
+	tokenOutMint := accounts[7]
+	_ = accounts[8] // oracle
 	user := accounts[10]
 
 	// Extract instruction data
@@ -247,8 +269,39 @@ func (p *TransactionParser) parseSwap(tx *models.Transaction, instruction models
 	fmt.Printf("Swap: %s, User: %s, AmountIn: %d, MinAmountOut: %d\n",
 		lbPair, user, amountIn, minAmountOut)
 
-	// Here you would typically save this data to your database
-	// p.db.Create(&models.MeteoraSwap{...})
+	// Find or create the pair ID
+	var pairID uint
+	var pair models.MeteoraPair
+	if err := p.db.Where("address = ?", lbPair).First(&pair).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	}
+	pairID = pair.ID
+
+	// Find or create the wallet ID
+	var walletID uint
+	var wallet models.Wallet
+	if err := p.db.Where("address = ?", user).FirstOrCreate(&wallet, models.Wallet{Address: user}).Error; err != nil {
+		return fmt.Errorf("failed to find/create wallet: %w", err)
+	}
+	walletID = wallet.ID
+
+	// Save to database
+	meteoraSwap := &models.MeteoraSwap{
+		TransactionID: tx.ID,
+		PairID:        pairID,
+		WalletID:      walletID,
+		User:          user,
+		TokenInMint:   tokenInMint,
+		TokenOutMint:  tokenOutMint,
+		AmountIn:      amountIn,
+		MinAmountOut:  minAmountOut,
+		SwapTime:      tx.BlockTime,
+	}
+
+	result := p.db.Create(meteoraSwap)
+	if result.Error != nil {
+		return fmt.Errorf("failed to save Meteora swap: %w", result.Error)
+	}
 
 	return nil
 }
@@ -258,19 +311,24 @@ func (p *TransactionParser) parseAddLiquidity(tx *models.Transaction, instructio
 	fmt.Println("Parsing addLiquidity instruction")
 
 	// Extract account addresses
-	accounts := instruction.Accounts
+	var accounts []string
+	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+	}
+
 	if len(accounts) < 13 {
 		return fmt.Errorf("not enough accounts for addLiquidity instruction")
 	}
 
 	// Map accounts based on the documentation
-	position := accounts[0]
-	lbPair := accounts[1]
-	userTokenX := accounts[3]
-	userTokenY := accounts[4]
-	reserveX := accounts[5]
-	reserveY := accounts[6]
-	sender := accounts[11]
+	positionAddr := accounts[0]
+	lbPairAddr := accounts[1]
+	_ = accounts[3] // userTokenX
+	_ = accounts[4] // userTokenY
+	_ = accounts[5] // reserveX
+	_ = accounts[6] // reserveY
+	senderAddr := accounts[11]
 
 	// Extract liquidity parameters
 	var amountX, amountY uint64
@@ -292,10 +350,42 @@ func (p *TransactionParser) parseAddLiquidity(tx *models.Transaction, instructio
 	}
 
 	fmt.Printf("Add Liquidity: Position: %s, LbPair: %s, User: %s, AmountX: %d, AmountY: %d, ActiveID: %d\n",
-		position, lbPair, sender, amountX, amountY, activeId)
+		positionAddr, lbPairAddr, senderAddr, amountX, amountY, activeId)
 
-	// Here you would typically save this data to your database
-	// p.db.Create(&models.MeteoraLiquidityAddition{...})
+	// Look up the pair and position in the database
+	var pair models.MeteoraPair
+	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	}
+
+	var position models.MeteoraPosition
+	if err := p.db.Where("address = ?", positionAddr).First(&position).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora position: %w", err)
+	}
+
+	// Find or create the wallet
+	var wallet models.Wallet
+	if err := p.db.Where("address = ?", senderAddr).FirstOrCreate(&wallet, models.Wallet{Address: senderAddr}).Error; err != nil {
+		return fmt.Errorf("failed to find/create wallet: %w", err)
+	}
+
+	// Save to database
+	liquidityAddition := &models.MeteoraLiquidityAddition{
+		TransactionID: tx.ID,
+		PositionID:    position.ID,
+		PairID:        pair.ID,
+		WalletID:      wallet.ID,
+		User:          senderAddr,
+		AmountX:       amountX,
+		AmountY:       amountY,
+		ActiveID:      activeId,
+		AddTime:       tx.BlockTime,
+	}
+
+	result := p.db.Create(liquidityAddition)
+	if result.Error != nil {
+		return fmt.Errorf("failed to save Meteora liquidity addition: %w", result.Error)
+	}
 
 	return nil
 }
@@ -305,19 +395,24 @@ func (p *TransactionParser) parseRemoveLiquidity(tx *models.Transaction, instruc
 	fmt.Println("Parsing removeLiquidity instruction")
 
 	// Extract account addresses
-	accounts := instruction.Accounts
+	var accounts []string
+	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+	}
+
 	if len(accounts) < 13 {
 		return fmt.Errorf("not enough accounts for removeLiquidity instruction")
 	}
 
 	// Map accounts based on the documentation
-	position := accounts[0]
-	lbPair := accounts[1]
-	userTokenX := accounts[3]
-	userTokenY := accounts[4]
-	reserveX := accounts[5]
-	reserveY := accounts[6]
-	sender := accounts[11]
+	positionAddr := accounts[0]
+	lbPairAddr := accounts[1]
+	_ = accounts[3] // userTokenX
+	_ = accounts[4] // userTokenY
+	_ = accounts[5] // reserveX
+	_ = accounts[6] // reserveY
+	senderAddr := accounts[11]
 
 	// Extract bin liquidity reductions
 	type BinReduction struct {
@@ -352,10 +447,46 @@ func (p *TransactionParser) parseRemoveLiquidity(tx *models.Transaction, instruc
 	}
 
 	fmt.Printf("Remove Liquidity: Position: %s, LbPair: %s, User: %s, Bins: %d\n",
-		position, lbPair, sender, len(binReductions))
+		positionAddr, lbPairAddr, senderAddr, len(binReductions))
 
-	// Here you would typically save this data to your database
-	// p.db.Create(&models.MeteoraLiquidityRemoval{...})
+	// Look up the pair and position in the database
+	var pair models.MeteoraPair
+	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	}
+
+	var position models.MeteoraPosition
+	if err := p.db.Where("address = ?", positionAddr).First(&position).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora position: %w", err)
+	}
+
+	// Find or create the wallet
+	var wallet models.Wallet
+	if err := p.db.Where("address = ?", senderAddr).FirstOrCreate(&wallet, models.Wallet{Address: senderAddr}).Error; err != nil {
+		return fmt.Errorf("failed to find/create wallet: %w", err)
+	}
+
+	// Save to database
+	// Convert bin reductions to JSON
+	binReductionsJSON, err := json.Marshal(binReductions)
+	if err != nil {
+		return fmt.Errorf("failed to marshal bin reductions: %w", err)
+	}
+
+	liquidityRemoval := &models.MeteoraLiquidityRemoval{
+		TransactionID: tx.ID,
+		PositionID:    position.ID,
+		PairID:        pair.ID,
+		WalletID:      wallet.ID,
+		User:          senderAddr,
+		RemoveTime:    tx.BlockTime,
+		BinReductions: string(binReductionsJSON),
+	}
+
+	result := p.db.Create(liquidityRemoval)
+	if result.Error != nil {
+		return fmt.Errorf("failed to save Meteora liquidity removal: %w", result.Error)
+	}
 
 	return nil
 }
@@ -365,16 +496,21 @@ func (p *TransactionParser) parseInitializePosition(tx *models.Transaction, inst
 	fmt.Println("Parsing initializePosition instruction")
 
 	// Extract account addresses
-	accounts := instruction.Accounts
+	var accounts []string
+	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+	}
+
 	if len(accounts) < 8 {
 		return fmt.Errorf("not enough accounts for initializePosition instruction")
 	}
 
 	// Map accounts based on the documentation
-	payer := accounts[0]
-	position := accounts[1]
-	lbPair := accounts[2]
-	owner := accounts[3]
+	_ = accounts[0] // payer
+	positionAddr := accounts[1]
+	lbPairAddr := accounts[2]
+	ownerAddr := accounts[3]
 
 	// Extract instruction data
 	var lowerBinId int32
@@ -389,10 +525,35 @@ func (p *TransactionParser) parseInitializePosition(tx *models.Transaction, inst
 	}
 
 	fmt.Printf("Initialize Position: %s, LbPair: %s, Owner: %s, LowerBinID: %d, Width: %d\n",
-		position, lbPair, owner, lowerBinId, width)
+		positionAddr, lbPairAddr, ownerAddr, lowerBinId, width)
 
-	// Here you would typically save this data to your database
-	// p.db.Create(&models.MeteoraPosition{...})
+	// Look up the pair in the database
+	var pair models.MeteoraPair
+	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	}
+
+	// Find or create the wallet
+	var wallet models.Wallet
+	if err := p.db.Where("address = ?", ownerAddr).FirstOrCreate(&wallet, models.Wallet{Address: ownerAddr}).Error; err != nil {
+		return fmt.Errorf("failed to find/create wallet: %w", err)
+	}
+
+	// Save to database
+	meteoraPosition := &models.MeteoraPosition{
+		Address:    positionAddr,
+		PairID:     pair.ID,
+		WalletID:   wallet.ID,
+		Owner:      ownerAddr,
+		LowerBinID: lowerBinId,
+		Width:      width,
+		CreatedAt:  tx.BlockTime,
+	}
+
+	result := p.db.Create(meteoraPosition)
+	if result.Error != nil {
+		return fmt.Errorf("failed to save Meteora position: %w", result.Error)
+	}
 
 	return nil
 }
@@ -402,25 +563,59 @@ func (p *TransactionParser) parseClaimFee(tx *models.Transaction, instruction mo
 	fmt.Println("Parsing claimFee instruction")
 
 	// Extract account addresses
-	accounts := instruction.Accounts
+	var accounts []string
+	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+	}
+
 	if len(accounts) < 14 {
 		return fmt.Errorf("not enough accounts for claimFee instruction")
 	}
 
 	// Map accounts based on the documentation
-	lbPair := accounts[0]
-	position := accounts[1]
-	sender := accounts[4]
-	reserveX := accounts[5]
-	reserveY := accounts[6]
-	userTokenX := accounts[7]
-	userTokenY := accounts[8]
+	lbPairAddr := accounts[0]
+	positionAddr := accounts[1]
+	senderAddr := accounts[4]
+	_ = accounts[5] // reserveX
+	_ = accounts[6] // reserveY
+	_ = accounts[7] // userTokenX
+	_ = accounts[8] // userTokenY
 
 	fmt.Printf("Claim Fee: Position: %s, LbPair: %s, User: %s\n",
-		position, lbPair, sender)
+		positionAddr, lbPairAddr, senderAddr)
 
-	// Here you would typically save this data to your database
-	// p.db.Create(&models.MeteoraFeeClaim{...})
+	// Look up the pair and position in the database
+	var pair models.MeteoraPair
+	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	}
+
+	var position models.MeteoraPosition
+	if err := p.db.Where("address = ?", positionAddr).First(&position).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora position: %w", err)
+	}
+
+	// Find or create the wallet
+	var wallet models.Wallet
+	if err := p.db.Where("address = ?", senderAddr).FirstOrCreate(&wallet, models.Wallet{Address: senderAddr}).Error; err != nil {
+		return fmt.Errorf("failed to find/create wallet: %w", err)
+	}
+
+	// Save to database
+	feeClaim := &models.MeteoraFeeClaim{
+		TransactionID: tx.ID,
+		PositionID:    position.ID,
+		PairID:        pair.ID,
+		WalletID:      wallet.ID,
+		User:          senderAddr,
+		ClaimTime:     tx.BlockTime,
+	}
+
+	result := p.db.Create(feeClaim)
+	if result.Error != nil {
+		return fmt.Errorf("failed to save Meteora fee claim: %w", result.Error)
+	}
 
 	return nil
 }
@@ -430,22 +625,38 @@ func (p *TransactionParser) parseClosePosition(tx *models.Transaction, instructi
 	fmt.Println("Parsing closePosition instruction")
 
 	// Extract account addresses
-	accounts := instruction.Accounts
+	var accounts []string
+	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+	}
+
 	if len(accounts) < 8 {
 		return fmt.Errorf("not enough accounts for closePosition instruction")
 	}
 
 	// Map accounts based on the documentation
-	position := accounts[0]
-	lbPair := accounts[1]
-	sender := accounts[4]
+	positionAddr := accounts[0]
+	lbPairAddr := accounts[1]
+	senderAddr := accounts[4]
 	rentReceiver := accounts[5]
 
 	fmt.Printf("Close Position: %s, LbPair: %s, User: %s, RentReceiver: %s\n",
-		position, lbPair, sender, rentReceiver)
+		positionAddr, lbPairAddr, senderAddr, rentReceiver)
 
-	// Here you would typically save this data to your database
-	// p.db.Create(&models.MeteoraPositionClosure{...})
+	// Look up the position in the database
+	var position models.MeteoraPosition
+	if err := p.db.Where("address = ?", positionAddr).First(&position).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora position: %w", err)
+	}
+
+	// Update the position's status to closed
+	now := time.Now()
+	position.Status = "closed"
+	position.ClosedAt = &now
+	if err := p.db.Save(&position).Error; err != nil {
+		return fmt.Errorf("failed to update position status: %w", err)
+	}
 
 	return nil
 }
@@ -455,16 +666,21 @@ func (p *TransactionParser) parseInitializeReward(tx *models.Transaction, instru
 	fmt.Println("Parsing initializeReward instruction")
 
 	// Extract account addresses
-	accounts := instruction.Accounts
+	var accounts []string
+	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+	}
+
 	if len(accounts) < 10 {
 		return fmt.Errorf("not enough accounts for initializeReward instruction")
 	}
 
 	// Map accounts based on the documentation
-	lbPair := accounts[0]
+	lbPairAddr := accounts[0]
 	rewardVault := accounts[1]
 	rewardMint := accounts[2]
-	admin := accounts[4]
+	_ = accounts[4] // admin
 
 	// Extract instruction data
 	var rewardIndex uint64
@@ -484,10 +700,34 @@ func (p *TransactionParser) parseInitializeReward(tx *models.Transaction, instru
 	}
 
 	fmt.Printf("Initialize Reward: LbPair: %s, RewardIndex: %d, Duration: %d, Funder: %s\n",
-		lbPair, rewardIndex, rewardDuration, funder)
+		lbPairAddr, rewardIndex, rewardDuration, funder)
 
-	// Here you would typically save this data to your database
-	// p.db.Create(&models.MeteoraReward{...})
+	// Look up the pair in the database
+	var pair models.MeteoraPair
+	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	}
+
+	// Calculate start and end times
+	startTime := tx.BlockTime
+	endTime := startTime.Add(time.Duration(rewardDuration) * time.Second)
+
+	// Save to database
+	reward := &models.MeteoraReward{
+		PairID:         pair.ID,
+		RewardIndex:    rewardIndex,
+		RewardVault:    rewardVault,
+		RewardMint:     rewardMint,
+		Funder:         funder,
+		RewardDuration: rewardDuration,
+		StartTime:      startTime,
+		EndTime:        endTime,
+	}
+
+	result := p.db.Create(reward)
+	if result.Error != nil {
+		return fmt.Errorf("failed to save Meteora reward: %w", result.Error)
+	}
 
 	return nil
 }
@@ -497,17 +737,22 @@ func (p *TransactionParser) parseFundReward(tx *models.Transaction, instruction 
 	fmt.Println("Parsing fundReward instruction")
 
 	// Extract account addresses
-	accounts := instruction.Accounts
+	var accounts []string
+	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+	}
+
 	if len(accounts) < 9 {
 		return fmt.Errorf("not enough accounts for fundReward instruction")
 	}
 
 	// Map accounts based on the documentation
-	lbPair := accounts[0]
-	rewardVault := accounts[1]
-	rewardMint := accounts[2]
-	funderTokenAccount := accounts[3]
-	funder := accounts[4]
+	lbPairAddr := accounts[0]
+	_ = accounts[1] // rewardVault
+	_ = accounts[2] // rewardMint
+	_ = accounts[3] // funderTokenAccount
+	funderAddr := accounts[4]
 
 	// Extract instruction data
 	var rewardIndex uint64
@@ -529,10 +774,42 @@ func (p *TransactionParser) parseFundReward(tx *models.Transaction, instruction 
 	}
 
 	fmt.Printf("Fund Reward: LbPair: %s, RewardIndex: %d, Amount: %d, CarryForward: %v\n",
-		lbPair, rewardIndex, amount, carryForward)
+		lbPairAddr, rewardIndex, amount, carryForward)
 
-	// Here you would typically save this data to your database
-	// p.db.Create(&models.MeteoraRewardFunding{...})
+	// Look up the pair in the database
+	var pair models.MeteoraPair
+	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	}
+
+	// Look up the reward in the database
+	var reward models.MeteoraReward
+	if err := p.db.Where("pair_id = ? AND reward_index = ?", pair.ID, rewardIndex).First(&reward).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora reward: %w", err)
+	}
+
+	// Find or create the wallet
+	var wallet models.Wallet
+	if err := p.db.Where("address = ?", funderAddr).FirstOrCreate(&wallet, models.Wallet{Address: funderAddr}).Error; err != nil {
+		return fmt.Errorf("failed to find/create wallet: %w", err)
+	}
+
+	// Save to database
+	rewardFunding := &models.MeteoraRewardFunding{
+		TransactionID: tx.ID,
+		RewardID:      reward.ID,
+		PairID:        pair.ID,
+		WalletID:      wallet.ID,
+		Funder:        funderAddr,
+		Amount:        amount,
+		CarryForward:  carryForward,
+		FundTime:      tx.BlockTime,
+	}
+
+	result := p.db.Create(rewardFunding)
+	if result.Error != nil {
+		return fmt.Errorf("failed to save Meteora reward funding: %w", result.Error)
+	}
 
 	return nil
 }
@@ -542,18 +819,23 @@ func (p *TransactionParser) parseClaimReward(tx *models.Transaction, instruction
 	fmt.Println("Parsing claimReward instruction")
 
 	// Extract account addresses
-	accounts := instruction.Accounts
+	var accounts []string
+	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+	}
+
 	if len(accounts) < 11 {
 		return fmt.Errorf("not enough accounts for claimReward instruction")
 	}
 
 	// Map accounts based on the documentation
-	lbPair := accounts[0]
-	position := accounts[1]
-	sender := accounts[4]
-	rewardVault := accounts[5]
-	rewardMint := accounts[6]
-	userTokenAccount := accounts[7]
+	lbPairAddr := accounts[0]
+	positionAddr := accounts[1]
+	senderAddr := accounts[4]
+	_ = accounts[5] // rewardVault
+	_ = accounts[6] // rewardMint
+	_ = accounts[7] // userTokenAccount
 
 	// Extract instruction data
 	var rewardIndex uint64
@@ -563,10 +845,47 @@ func (p *TransactionParser) parseClaimReward(tx *models.Transaction, instruction
 	}
 
 	fmt.Printf("Claim Reward: Position: %s, LbPair: %s, User: %s, RewardIndex: %d\n",
-		position, lbPair, sender, rewardIndex)
+		positionAddr, lbPairAddr, senderAddr, rewardIndex)
 
-	// Here you would typically save this data to your database
-	// p.db.Create(&models.MeteoraRewardClaim{...})
+	// Look up the pair in the database
+	var pair models.MeteoraPair
+	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	}
+
+	// Look up the position in the database
+	var position models.MeteoraPosition
+	if err := p.db.Where("address = ?", positionAddr).First(&position).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora position: %w", err)
+	}
+
+	// Look up the reward in the database
+	var reward models.MeteoraReward
+	if err := p.db.Where("pair_id = ? AND reward_index = ?", pair.ID, rewardIndex).First(&reward).Error; err != nil {
+		return fmt.Errorf("failed to find Meteora reward: %w", err)
+	}
+
+	// Find or create the wallet
+	var wallet models.Wallet
+	if err := p.db.Where("address = ?", senderAddr).FirstOrCreate(&wallet, models.Wallet{Address: senderAddr}).Error; err != nil {
+		return fmt.Errorf("failed to find/create wallet: %w", err)
+	}
+
+	// Save to database
+	rewardClaim := &models.MeteoraRewardClaim{
+		TransactionID: tx.ID,
+		PositionID:    position.ID,
+		RewardID:      reward.ID,
+		PairID:        pair.ID,
+		WalletID:      wallet.ID,
+		User:          senderAddr,
+		ClaimTime:     tx.BlockTime,
+	}
+
+	result := p.db.Create(rewardClaim)
+	if result.Error != nil {
+		return fmt.Errorf("failed to save Meteora reward claim: %w", result.Error)
+	}
 
 	return nil
 }

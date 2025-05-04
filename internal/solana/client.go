@@ -242,12 +242,10 @@ func convertToTransaction(resp RPCResponse, signature string) (*models.Transacti
 		Signature:            signature,
 		BlockTime:            time.Unix(tx.BlockTime, 0),
 		Fee:                  tx.Meta.Fee,
-		FeeInSol:             float64(tx.Meta.Fee) / 1e9, // Convert lamports to SOL
 		ComputeUnitsConsumed: uint64(tx.Meta.ComputeUnitsConsumed),
 		RecentBlockhash:      tx.Transaction.Message.RecentBlockhash,
 		InstructionsCount:    len(tx.Transaction.Message.Instructions),
 		PriorityFee:          tx.Meta.PriorityFee,
-		PriorityFeeInSol:     float64(tx.Meta.PriorityFee) / 1e9,
 	}
 
 	// Process signers
