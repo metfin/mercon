@@ -6,9 +6,13 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/wnt/mercon/internal/models"
 	"gorm.io/gorm"
+)
+
+// Constants for program IDs
+const (
+	MeteoraProgram = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo"
 )
 
 // TransactionParser handles parsing and saving transaction data
@@ -34,7 +38,7 @@ func (p *TransactionParser) ProcessTransaction(ctx context.Context, tx *models.T
 	// Check if any of the instructions are a Meteora DLMM transaction.
 	meteoraInstructions := []models.TransactionInstruction{}
 	for _, instruction := range tx.Instructions {
-		if instruction.ProgramID == "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo" {
+		if instruction.ProgramID == MeteoraProgram {
 			meteoraInstructions = append(meteoraInstructions, instruction)
 		}
 	}
@@ -94,6 +98,98 @@ func (p *TransactionParser) ProcessTransaction(ctx context.Context, tx *models.T
 	}
 
 	return nil
+}
+
+// extractAccounts extracts account addresses from an instruction
+func extractAccounts(instruction models.TransactionInstruction) ([]string, error) {
+	var accounts []string
+	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to unmarshal accounts: %w", err)
+	}
+	return accounts, nil
+}
+
+// findOrCreateWallet finds or creates a wallet and returns its ID
+func (p *TransactionParser) findOrCreateWallet(address string) (uint, error) {
+	var wallet models.Wallet
+	if err := p.db.Where("address = ?", address).FirstOrCreate(&wallet, models.Wallet{Address: address}).Error; err != nil {
+		return 0, fmt.Errorf("failed to find/create wallet: %w", err)
+	}
+	return wallet.ID, nil
+}
+
+// findPair finds a Meteora pair by address and returns it
+func (p *TransactionParser) findPair(address string) (models.MeteoraPair, error) {
+	var pair models.MeteoraPair
+	if err := p.db.Where("address = ?", address).First(&pair).Error; err != nil {
+		return pair, fmt.Errorf("failed to find Meteora pair: %w", err)
+	}
+	return pair, nil
+}
+
+// findPosition finds a Meteora position by address and returns it
+func (p *TransactionParser) findPosition(address string) (models.MeteoraPosition, error) {
+	var position models.MeteoraPosition
+	if err := p.db.Where("address = ?", address).First(&position).Error; err != nil {
+		return position, fmt.Errorf("failed to find Meteora position: %w", err)
+	}
+	return position, nil
+}
+
+// findReward finds a Meteora reward by pair and index
+func (p *TransactionParser) findReward(pairID uint, rewardIndex uint64) (models.MeteoraReward, error) {
+	var reward models.MeteoraReward
+	if err := p.db.Where("pair_id = ? AND reward_index = ?", pairID, rewardIndex).First(&reward).Error; err != nil {
+		return reward, fmt.Errorf("failed to find Meteora reward: %w", err)
+	}
+	return reward, nil
+}
+
+// extractUint64 extracts a uint64 value from data
+func extractUint64(data map[string]interface{}, key string) uint64 {
+	var value uint64
+	if val, ok := data[key]; ok {
+		if strVal, ok := val.(string); ok {
+			fmt.Sscanf(strVal, "%d", &value)
+		} else if floatVal, ok := val.(float64); ok {
+			value = uint64(floatVal)
+		}
+	}
+	return value
+}
+
+// extractInt32 extracts an int32 value from data
+func extractInt32(data map[string]interface{}, key string) int32 {
+	var value int32
+	if val, ok := data[key]; ok {
+		if floatVal, ok := val.(float64); ok {
+			value = int32(floatVal)
+		}
+	}
+	return value
+}
+
+// extractUint16 extracts a uint16 value from data
+func extractUint16(data map[string]interface{}, key string) uint16 {
+	var value uint16
+	if val, ok := data[key]; ok {
+		if floatVal, ok := val.(float64); ok {
+			value = uint16(floatVal)
+		}
+	}
+	return value
+}
+
+// extractBool extracts a boolean value from data
+func extractBool(data map[string]interface{}, key string) bool {
+	var value bool
+	if val, ok := data[key]; ok {
+		if boolVal, ok := val.(bool); ok {
+			value = boolVal
+		}
+	}
+	return value
 }
 
 // getInstructionType determines the Meteora DLMM instruction type
@@ -166,10 +262,9 @@ func (p *TransactionParser) parseInitializeLbPair(tx *models.Transaction, instru
 	fmt.Println("Parsing initializeLbPair instruction")
 
 	// Extract account addresses
-	var accounts []string
-	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	accounts, err := extractAccounts(instruction)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+		return err
 	}
 
 	if len(accounts) < 13 {
@@ -180,25 +275,10 @@ func (p *TransactionParser) parseInitializeLbPair(tx *models.Transaction, instru
 	pairAccount := accounts[0]
 	tokenMintX := accounts[2]
 	tokenMintY := accounts[3]
-	_ = accounts[4] // reserveX
-	_ = accounts[5] // reserveY
-	_ = accounts[6] // oracle
 
 	// Extract instruction data
-	var activeId int32
-	var binStep uint16
-
-	if val, ok := data["activeId"]; ok {
-		if floatVal, ok := val.(float64); ok {
-			activeId = int32(floatVal)
-		}
-	}
-
-	if val, ok := data["binStep"]; ok {
-		if floatVal, ok := val.(float64); ok {
-			binStep = uint16(floatVal)
-		}
-	}
+	activeId := extractInt32(data, "activeId")
+	binStep := extractUint16(data, "binStep")
 
 	fmt.Printf("LB Pair Created: %s, TokenX: %s, TokenY: %s, ActiveID: %d, BinStep: %d\n",
 		pairAccount, tokenMintX, tokenMintY, activeId, binStep)
@@ -225,10 +305,9 @@ func (p *TransactionParser) parseSwap(tx *models.Transaction, instruction models
 	fmt.Println("Parsing swap instruction")
 
 	// Extract account addresses
-	var accounts []string
-	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	accounts, err := extractAccounts(instruction)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+		return err
 	}
 
 	if len(accounts) < 11 {
@@ -237,58 +316,32 @@ func (p *TransactionParser) parseSwap(tx *models.Transaction, instruction models
 
 	// Map accounts based on the documentation
 	lbPair := accounts[0]
-	_ = accounts[2] // reserveX
-	_ = accounts[3] // reserveY
-	_ = accounts[4] // userTokenIn
-	_ = accounts[5] // userTokenOut
 	tokenInMint := accounts[6]
 	tokenOutMint := accounts[7]
-	_ = accounts[8] // oracle
 	user := accounts[10]
 
 	// Extract instruction data
-	var amountIn uint64
-	var minAmountOut uint64
-
-	if val, ok := data["amountIn"]; ok {
-		if strVal, ok := val.(string); ok {
-			fmt.Sscanf(strVal, "%d", &amountIn)
-		} else if floatVal, ok := val.(float64); ok {
-			amountIn = uint64(floatVal)
-		}
-	}
-
-	if val, ok := data["minAmountOut"]; ok {
-		if strVal, ok := val.(string); ok {
-			fmt.Sscanf(strVal, "%d", &minAmountOut)
-		} else if floatVal, ok := val.(float64); ok {
-			minAmountOut = uint64(floatVal)
-		}
-	}
+	amountIn := extractUint64(data, "amountIn")
+	minAmountOut := extractUint64(data, "minAmountOut")
 
 	fmt.Printf("Swap: %s, User: %s, AmountIn: %d, MinAmountOut: %d\n",
 		lbPair, user, amountIn, minAmountOut)
 
-	// Find or create the pair ID
-	var pairID uint
-	var pair models.MeteoraPair
-	if err := p.db.Where("address = ?", lbPair).First(&pair).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	// Find pair and wallet
+	pair, err := p.findPair(lbPair)
+	if err != nil {
+		return err
 	}
-	pairID = pair.ID
 
-	// Find or create the wallet ID
-	var walletID uint
-	var wallet models.Wallet
-	if err := p.db.Where("address = ?", user).FirstOrCreate(&wallet, models.Wallet{Address: user}).Error; err != nil {
-		return fmt.Errorf("failed to find/create wallet: %w", err)
+	walletID, err := p.findOrCreateWallet(user)
+	if err != nil {
+		return err
 	}
-	walletID = wallet.ID
 
 	// Save to database
 	meteoraSwap := &models.MeteoraSwap{
 		TransactionID: tx.ID,
-		PairID:        pairID,
+		PairID:        pair.ID,
 		WalletID:      walletID,
 		User:          user,
 		TokenInMint:   tokenInMint,
@@ -311,10 +364,9 @@ func (p *TransactionParser) parseAddLiquidity(tx *models.Transaction, instructio
 	fmt.Println("Parsing addLiquidity instruction")
 
 	// Extract account addresses
-	var accounts []string
-	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	accounts, err := extractAccounts(instruction)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+		return err
 	}
 
 	if len(accounts) < 13 {
@@ -324,10 +376,6 @@ func (p *TransactionParser) parseAddLiquidity(tx *models.Transaction, instructio
 	// Map accounts based on the documentation
 	positionAddr := accounts[0]
 	lbPairAddr := accounts[1]
-	_ = accounts[3] // userTokenX
-	_ = accounts[4] // userTokenY
-	_ = accounts[5] // reserveX
-	_ = accounts[6] // reserveY
 	senderAddr := accounts[11]
 
 	// Extract liquidity parameters
@@ -352,21 +400,20 @@ func (p *TransactionParser) parseAddLiquidity(tx *models.Transaction, instructio
 	fmt.Printf("Add Liquidity: Position: %s, LbPair: %s, User: %s, AmountX: %d, AmountY: %d, ActiveID: %d\n",
 		positionAddr, lbPairAddr, senderAddr, amountX, amountY, activeId)
 
-	// Look up the pair and position in the database
-	var pair models.MeteoraPair
-	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	// Find pair, position and wallet
+	pair, err := p.findPair(lbPairAddr)
+	if err != nil {
+		return err
 	}
 
-	var position models.MeteoraPosition
-	if err := p.db.Where("address = ?", positionAddr).First(&position).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora position: %w", err)
+	position, err := p.findPosition(positionAddr)
+	if err != nil {
+		return err
 	}
 
-	// Find or create the wallet
-	var wallet models.Wallet
-	if err := p.db.Where("address = ?", senderAddr).FirstOrCreate(&wallet, models.Wallet{Address: senderAddr}).Error; err != nil {
-		return fmt.Errorf("failed to find/create wallet: %w", err)
+	walletID, err := p.findOrCreateWallet(senderAddr)
+	if err != nil {
+		return err
 	}
 
 	// Save to database
@@ -374,7 +421,7 @@ func (p *TransactionParser) parseAddLiquidity(tx *models.Transaction, instructio
 		TransactionID: tx.ID,
 		PositionID:    position.ID,
 		PairID:        pair.ID,
-		WalletID:      wallet.ID,
+		WalletID:      walletID,
 		User:          senderAddr,
 		AmountX:       amountX,
 		AmountY:       amountY,
@@ -395,10 +442,9 @@ func (p *TransactionParser) parseRemoveLiquidity(tx *models.Transaction, instruc
 	fmt.Println("Parsing removeLiquidity instruction")
 
 	// Extract account addresses
-	var accounts []string
-	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	accounts, err := extractAccounts(instruction)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+		return err
 	}
 
 	if len(accounts) < 13 {
@@ -408,10 +454,6 @@ func (p *TransactionParser) parseRemoveLiquidity(tx *models.Transaction, instruc
 	// Map accounts based on the documentation
 	positionAddr := accounts[0]
 	lbPairAddr := accounts[1]
-	_ = accounts[3] // userTokenX
-	_ = accounts[4] // userTokenY
-	_ = accounts[5] // reserveX
-	_ = accounts[6] // reserveY
 	senderAddr := accounts[11]
 
 	// Extract bin liquidity reductions
@@ -449,35 +491,34 @@ func (p *TransactionParser) parseRemoveLiquidity(tx *models.Transaction, instruc
 	fmt.Printf("Remove Liquidity: Position: %s, LbPair: %s, User: %s, Bins: %d\n",
 		positionAddr, lbPairAddr, senderAddr, len(binReductions))
 
-	// Look up the pair and position in the database
-	var pair models.MeteoraPair
-	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	// Find pair, position and wallet
+	pair, err := p.findPair(lbPairAddr)
+	if err != nil {
+		return err
 	}
 
-	var position models.MeteoraPosition
-	if err := p.db.Where("address = ?", positionAddr).First(&position).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora position: %w", err)
+	position, err := p.findPosition(positionAddr)
+	if err != nil {
+		return err
 	}
 
-	// Find or create the wallet
-	var wallet models.Wallet
-	if err := p.db.Where("address = ?", senderAddr).FirstOrCreate(&wallet, models.Wallet{Address: senderAddr}).Error; err != nil {
-		return fmt.Errorf("failed to find/create wallet: %w", err)
+	walletID, err := p.findOrCreateWallet(senderAddr)
+	if err != nil {
+		return err
 	}
 
-	// Save to database
 	// Convert bin reductions to JSON
 	binReductionsJSON, err := json.Marshal(binReductions)
 	if err != nil {
 		return fmt.Errorf("failed to marshal bin reductions: %w", err)
 	}
 
+	// Save to database
 	liquidityRemoval := &models.MeteoraLiquidityRemoval{
 		TransactionID: tx.ID,
 		PositionID:    position.ID,
 		PairID:        pair.ID,
-		WalletID:      wallet.ID,
+		WalletID:      walletID,
 		User:          senderAddr,
 		RemoveTime:    tx.BlockTime,
 		BinReductions: string(binReductionsJSON),
@@ -496,10 +537,9 @@ func (p *TransactionParser) parseInitializePosition(tx *models.Transaction, inst
 	fmt.Println("Parsing initializePosition instruction")
 
 	// Extract account addresses
-	var accounts []string
-	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	accounts, err := extractAccounts(instruction)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+		return err
 	}
 
 	if len(accounts) < 8 {
@@ -507,43 +547,33 @@ func (p *TransactionParser) parseInitializePosition(tx *models.Transaction, inst
 	}
 
 	// Map accounts based on the documentation
-	_ = accounts[0] // payer
 	positionAddr := accounts[1]
 	lbPairAddr := accounts[2]
 	ownerAddr := accounts[3]
 
 	// Extract instruction data
-	var lowerBinId int32
-	var width int32
-
-	if val, ok := data["lowerBinId"].(float64); ok {
-		lowerBinId = int32(val)
-	}
-
-	if val, ok := data["width"].(float64); ok {
-		width = int32(val)
-	}
+	lowerBinId := extractInt32(data, "lowerBinId")
+	width := extractInt32(data, "width")
 
 	fmt.Printf("Initialize Position: %s, LbPair: %s, Owner: %s, LowerBinID: %d, Width: %d\n",
 		positionAddr, lbPairAddr, ownerAddr, lowerBinId, width)
 
-	// Look up the pair in the database
-	var pair models.MeteoraPair
-	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	// Find pair and wallet
+	pair, err := p.findPair(lbPairAddr)
+	if err != nil {
+		return err
 	}
 
-	// Find or create the wallet
-	var wallet models.Wallet
-	if err := p.db.Where("address = ?", ownerAddr).FirstOrCreate(&wallet, models.Wallet{Address: ownerAddr}).Error; err != nil {
-		return fmt.Errorf("failed to find/create wallet: %w", err)
+	walletID, err := p.findOrCreateWallet(ownerAddr)
+	if err != nil {
+		return err
 	}
 
 	// Save to database
 	meteoraPosition := &models.MeteoraPosition{
 		Address:    positionAddr,
 		PairID:     pair.ID,
-		WalletID:   wallet.ID,
+		WalletID:   walletID,
 		Owner:      ownerAddr,
 		LowerBinID: lowerBinId,
 		Width:      width,
@@ -563,10 +593,9 @@ func (p *TransactionParser) parseClaimFee(tx *models.Transaction, instruction mo
 	fmt.Println("Parsing claimFee instruction")
 
 	// Extract account addresses
-	var accounts []string
-	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	accounts, err := extractAccounts(instruction)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+		return err
 	}
 
 	if len(accounts) < 14 {
@@ -577,29 +606,24 @@ func (p *TransactionParser) parseClaimFee(tx *models.Transaction, instruction mo
 	lbPairAddr := accounts[0]
 	positionAddr := accounts[1]
 	senderAddr := accounts[4]
-	_ = accounts[5] // reserveX
-	_ = accounts[6] // reserveY
-	_ = accounts[7] // userTokenX
-	_ = accounts[8] // userTokenY
 
 	fmt.Printf("Claim Fee: Position: %s, LbPair: %s, User: %s\n",
 		positionAddr, lbPairAddr, senderAddr)
 
-	// Look up the pair and position in the database
-	var pair models.MeteoraPair
-	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	// Find pair, position and wallet
+	pair, err := p.findPair(lbPairAddr)
+	if err != nil {
+		return err
 	}
 
-	var position models.MeteoraPosition
-	if err := p.db.Where("address = ?", positionAddr).First(&position).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora position: %w", err)
+	position, err := p.findPosition(positionAddr)
+	if err != nil {
+		return err
 	}
 
-	// Find or create the wallet
-	var wallet models.Wallet
-	if err := p.db.Where("address = ?", senderAddr).FirstOrCreate(&wallet, models.Wallet{Address: senderAddr}).Error; err != nil {
-		return fmt.Errorf("failed to find/create wallet: %w", err)
+	walletID, err := p.findOrCreateWallet(senderAddr)
+	if err != nil {
+		return err
 	}
 
 	// Save to database
@@ -607,7 +631,7 @@ func (p *TransactionParser) parseClaimFee(tx *models.Transaction, instruction mo
 		TransactionID: tx.ID,
 		PositionID:    position.ID,
 		PairID:        pair.ID,
-		WalletID:      wallet.ID,
+		WalletID:      walletID,
 		User:          senderAddr,
 		ClaimTime:     tx.BlockTime,
 	}
@@ -625,10 +649,9 @@ func (p *TransactionParser) parseClosePosition(tx *models.Transaction, instructi
 	fmt.Println("Parsing closePosition instruction")
 
 	// Extract account addresses
-	var accounts []string
-	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	accounts, err := extractAccounts(instruction)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+		return err
 	}
 
 	if len(accounts) < 8 {
@@ -645,9 +668,9 @@ func (p *TransactionParser) parseClosePosition(tx *models.Transaction, instructi
 		positionAddr, lbPairAddr, senderAddr, rentReceiver)
 
 	// Look up the position in the database
-	var position models.MeteoraPosition
-	if err := p.db.Where("address = ?", positionAddr).First(&position).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora position: %w", err)
+	position, err := p.findPosition(positionAddr)
+	if err != nil {
+		return err
 	}
 
 	// Update the position's status to closed
@@ -666,10 +689,9 @@ func (p *TransactionParser) parseInitializeReward(tx *models.Transaction, instru
 	fmt.Println("Parsing initializeReward instruction")
 
 	// Extract account addresses
-	var accounts []string
-	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	accounts, err := extractAccounts(instruction)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+		return err
 	}
 
 	if len(accounts) < 10 {
@@ -680,21 +702,12 @@ func (p *TransactionParser) parseInitializeReward(tx *models.Transaction, instru
 	lbPairAddr := accounts[0]
 	rewardVault := accounts[1]
 	rewardMint := accounts[2]
-	_ = accounts[4] // admin
 
 	// Extract instruction data
-	var rewardIndex uint64
-	var rewardDuration uint64
+	rewardIndex := extractUint64(data, "rewardIndex")
+	rewardDuration := extractUint64(data, "rewardDuration")
+
 	var funder string
-
-	if val, ok := data["rewardIndex"].(float64); ok {
-		rewardIndex = uint64(val)
-	}
-
-	if val, ok := data["rewardDuration"].(float64); ok {
-		rewardDuration = uint64(val)
-	}
-
 	if val, ok := data["funder"].(string); ok {
 		funder = val
 	}
@@ -702,10 +715,10 @@ func (p *TransactionParser) parseInitializeReward(tx *models.Transaction, instru
 	fmt.Printf("Initialize Reward: LbPair: %s, RewardIndex: %d, Duration: %d, Funder: %s\n",
 		lbPairAddr, rewardIndex, rewardDuration, funder)
 
-	// Look up the pair in the database
-	var pair models.MeteoraPair
-	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	// Find pair
+	pair, err := p.findPair(lbPairAddr)
+	if err != nil {
+		return err
 	}
 
 	// Calculate start and end times
@@ -737,10 +750,9 @@ func (p *TransactionParser) parseFundReward(tx *models.Transaction, instruction 
 	fmt.Println("Parsing fundReward instruction")
 
 	// Extract account addresses
-	var accounts []string
-	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	accounts, err := extractAccounts(instruction)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+		return err
 	}
 
 	if len(accounts) < 9 {
@@ -749,49 +761,30 @@ func (p *TransactionParser) parseFundReward(tx *models.Transaction, instruction 
 
 	// Map accounts based on the documentation
 	lbPairAddr := accounts[0]
-	_ = accounts[1] // rewardVault
-	_ = accounts[2] // rewardMint
-	_ = accounts[3] // funderTokenAccount
 	funderAddr := accounts[4]
 
 	// Extract instruction data
-	var rewardIndex uint64
-	var amount uint64
-	var carryForward bool
-
-	if val, ok := data["rewardIndex"].(float64); ok {
-		rewardIndex = uint64(val)
-	}
-
-	if val, ok := data["amount"].(string); ok {
-		fmt.Sscanf(val, "%d", &amount)
-	} else if val, ok := data["amount"].(float64); ok {
-		amount = uint64(val)
-	}
-
-	if val, ok := data["carryForward"].(bool); ok {
-		carryForward = val
-	}
+	rewardIndex := extractUint64(data, "rewardIndex")
+	amount := extractUint64(data, "amount")
+	carryForward := extractBool(data, "carryForward")
 
 	fmt.Printf("Fund Reward: LbPair: %s, RewardIndex: %d, Amount: %d, CarryForward: %v\n",
 		lbPairAddr, rewardIndex, amount, carryForward)
 
-	// Look up the pair in the database
-	var pair models.MeteoraPair
-	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	// Find pair, reward and wallet
+	pair, err := p.findPair(lbPairAddr)
+	if err != nil {
+		return err
 	}
 
-	// Look up the reward in the database
-	var reward models.MeteoraReward
-	if err := p.db.Where("pair_id = ? AND reward_index = ?", pair.ID, rewardIndex).First(&reward).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora reward: %w", err)
+	reward, err := p.findReward(pair.ID, rewardIndex)
+	if err != nil {
+		return err
 	}
 
-	// Find or create the wallet
-	var wallet models.Wallet
-	if err := p.db.Where("address = ?", funderAddr).FirstOrCreate(&wallet, models.Wallet{Address: funderAddr}).Error; err != nil {
-		return fmt.Errorf("failed to find/create wallet: %w", err)
+	walletID, err := p.findOrCreateWallet(funderAddr)
+	if err != nil {
+		return err
 	}
 
 	// Save to database
@@ -799,7 +792,7 @@ func (p *TransactionParser) parseFundReward(tx *models.Transaction, instruction 
 		TransactionID: tx.ID,
 		RewardID:      reward.ID,
 		PairID:        pair.ID,
-		WalletID:      wallet.ID,
+		WalletID:      walletID,
 		Funder:        funderAddr,
 		Amount:        amount,
 		CarryForward:  carryForward,
@@ -819,10 +812,9 @@ func (p *TransactionParser) parseClaimReward(tx *models.Transaction, instruction
 	fmt.Println("Parsing claimReward instruction")
 
 	// Extract account addresses
-	var accounts []string
-	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
+	accounts, err := extractAccounts(instruction)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal accounts: %w", err)
+		return err
 	}
 
 	if len(accounts) < 11 {
@@ -833,42 +825,32 @@ func (p *TransactionParser) parseClaimReward(tx *models.Transaction, instruction
 	lbPairAddr := accounts[0]
 	positionAddr := accounts[1]
 	senderAddr := accounts[4]
-	_ = accounts[5] // rewardVault
-	_ = accounts[6] // rewardMint
-	_ = accounts[7] // userTokenAccount
 
 	// Extract instruction data
-	var rewardIndex uint64
-
-	if val, ok := data["rewardIndex"].(float64); ok {
-		rewardIndex = uint64(val)
-	}
+	rewardIndex := extractUint64(data, "rewardIndex")
 
 	fmt.Printf("Claim Reward: Position: %s, LbPair: %s, User: %s, RewardIndex: %d\n",
 		positionAddr, lbPairAddr, senderAddr, rewardIndex)
 
-	// Look up the pair in the database
-	var pair models.MeteoraPair
-	if err := p.db.Where("address = ?", lbPairAddr).First(&pair).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora pair: %w", err)
+	// Find pair, position, reward and wallet
+	pair, err := p.findPair(lbPairAddr)
+	if err != nil {
+		return err
 	}
 
-	// Look up the position in the database
-	var position models.MeteoraPosition
-	if err := p.db.Where("address = ?", positionAddr).First(&position).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora position: %w", err)
+	position, err := p.findPosition(positionAddr)
+	if err != nil {
+		return err
 	}
 
-	// Look up the reward in the database
-	var reward models.MeteoraReward
-	if err := p.db.Where("pair_id = ? AND reward_index = ?", pair.ID, rewardIndex).First(&reward).Error; err != nil {
-		return fmt.Errorf("failed to find Meteora reward: %w", err)
+	reward, err := p.findReward(pair.ID, rewardIndex)
+	if err != nil {
+		return err
 	}
 
-	// Find or create the wallet
-	var wallet models.Wallet
-	if err := p.db.Where("address = ?", senderAddr).FirstOrCreate(&wallet, models.Wallet{Address: senderAddr}).Error; err != nil {
-		return fmt.Errorf("failed to find/create wallet: %w", err)
+	walletID, err := p.findOrCreateWallet(senderAddr)
+	if err != nil {
+		return err
 	}
 
 	// Save to database
@@ -877,7 +859,7 @@ func (p *TransactionParser) parseClaimReward(tx *models.Transaction, instruction
 		PositionID:    position.ID,
 		RewardID:      reward.ID,
 		PairID:        pair.ID,
-		WalletID:      wallet.ID,
+		WalletID:      walletID,
 		User:          senderAddr,
 		ClaimTime:     tx.BlockTime,
 	}
@@ -888,31 +870,4 @@ func (p *TransactionParser) parseClaimReward(tx *models.Transaction, instruction
 	}
 
 	return nil
-}
-
-// parseInstructions extracts and stores instruction data
-func (p *TransactionParser) parseInstructions(tx *gorm.DB, rpcTx *rpc.TransactionWithMeta, transactionID uint) error {
-
-	return nil
-}
-
-// parseTokenTransfers extracts and stores token transfer information
-func (p *TransactionParser) parseTokenTransfers(tx *gorm.DB, rpcTx *rpc.TransactionWithMeta, transactionID uint) error {
-	return nil
-}
-
-// getProgramName returns a human-readable name for known program IDs
-func getProgramName(programID string) string {
-	knownPrograms := map[string]string{
-		"11111111111111111111111111111111":            "System Program",
-		"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA": "Token Program",
-		"LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo": "Meteora DLMM Program",
-		"TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": "Token-2022 Program",
-	}
-
-	if name, ok := knownPrograms[programID]; ok {
-		return name
-	}
-
-	return "Unknown Program"
 }
