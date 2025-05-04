@@ -333,6 +333,42 @@ func convertToTransaction(resp RPCResponse, signature string) (*models.Transacti
 	return transaction, nil
 }
 
+// GetAndProcessTransactions fetches transactions and processes them
+func (c *Client) GetAndProcessTransactions(ctx context.Context, address string, filters Filters, db *gorm.DB) ([]*models.Transaction, error) {
+	// First, get the transaction signatures
+	signatures, err := c.GetTransactionSigns(ctx, address, filters)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transaction signatures: %w", err)
+	}
+
+	// Fetch the transactions in bulk
+	transactions, err := c.GetTransactionsInBulk(ctx, signatures)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transactions in bulk: %w", err)
+	}
+
+	//check if ANY of these txs are registered in the database. if they are then they're processed as well
+	existingTxs := make(map[string]bool)
+	db.Model(&models.Transaction{}).Where("signature IN ?", signatures).Pluck("signature", &existingTxs)
+
+	// If any of these txs are registered in the database, remove them from the list
+	transactions = utils.Filter(transactions, func(tx *models.Transaction) bool {
+		return !existingTxs[tx.Signature]
+	})
+
+	// Create a parser to filter the transactions
+	parser := NewTransactionParser(db, c)
+
+	// Process the transactions
+	for _, tx := range transactions {
+		parser.ProcessTransaction(ctx, tx)
+	}
+
+	fmt.Printf("Processed %d transactions\n", len(transactions))
+
+	return transactions, nil
+}
+
 // SaveTransactions saves transactions to the database
 func SaveTransactions(db *gorm.DB, walletID uint, transactions []*models.Transaction) error {
 	if len(transactions) == 0 {
@@ -376,44 +412,4 @@ func SaveTransactions(db *gorm.DB, walletID uint, transactions []*models.Transac
 
 		return nil
 	})
-}
-
-// FetchAndSaveTransactions fetches transactions for a wallet and saves them to the database
-func (c *Client) FetchAndSaveTransactions(ctx context.Context, db *gorm.DB, walletAddress string, walletID uint, filters Filters) (int, error) {
-	// Step 1: Get transaction signatures
-	signatures, err := c.GetTransactionSigns(ctx, walletAddress, filters)
-	if err != nil {
-		return 0, fmt.Errorf("failed to get transaction signatures: %w", err)
-	}
-
-	if len(signatures) == 0 {
-		return 0, nil // No transactions found
-	}
-
-	// Process in batches to avoid large requests
-	const batchSize = 100
-	processedCount := 0
-
-	for i := 0; i < len(signatures); i += batchSize {
-		end := i + batchSize
-		if end > len(signatures) {
-			end = len(signatures)
-		}
-
-		// Step 2: Get transaction details for this batch
-		batchSignatures := signatures[i:end]
-		transactions, err := c.GetTransactionsInBulk(ctx, batchSignatures)
-		if err != nil {
-			return processedCount, fmt.Errorf("failed to get transactions for batch: %w", err)
-		}
-
-		// Step 3: Save transactions to database
-		if err := SaveTransactions(db, walletID, transactions); err != nil {
-			return processedCount, fmt.Errorf("failed to save transactions: %w", err)
-		}
-
-		processedCount += len(transactions)
-	}
-
-	return processedCount, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/gagliardetto/solana-go/rpc"
+	"github.com/wnt/mercon/internal/models"
 	"gorm.io/gorm"
 )
 
@@ -22,14 +23,14 @@ func NewTransactionParser(db *gorm.DB, client *Client) *TransactionParser {
 	}
 }
 
-// ParseAndStoreTransaction parses a transaction and stores it in the database
-func (p *TransactionParser) ParseAndStoreTransaction(ctx context.Context, tx *rpc.TransactionWithMeta, walletID uint) error {
-	if tx == nil || tx.Transaction == nil {
+// ProcessTransaction parses a transaction and stores it in the database
+func (p *TransactionParser) ProcessTransaction(ctx context.Context, tx *models.Transaction) error {
+	if tx == nil {
 		return fmt.Errorf("transaction data is nil")
 	}
 
 	// Extract basic transaction info
-	
+
 	// Check if transaction already exists
 
 	// Create new transaction record
@@ -51,7 +52,7 @@ func (p *TransactionParser) ParseAndStoreTransaction(ctx context.Context, tx *rp
 
 // parseInstructions extracts and stores instruction data
 func (p *TransactionParser) parseInstructions(tx *gorm.DB, rpcTx *rpc.TransactionWithMeta, transactionID uint) error {
-	
+
 	return nil
 }
 
@@ -63,15 +64,15 @@ func (p *TransactionParser) parseTokenTransfers(tx *gorm.DB, rpcTx *rpc.Transact
 // getProgramName returns a human-readable name for known program IDs
 func getProgramName(programID string) string {
 	knownPrograms := map[string]string{
-		"11111111111111111111111111111111": "System Program",
+		"11111111111111111111111111111111":            "System Program",
 		"TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA": "Token Program",
 		"LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo": "Meteora DLMM Program",
 		"TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb": "Token-2022 Program",
 	}
-	
+
 	if name, ok := knownPrograms[programID]; ok {
 		return name
 	}
-	
+
 	return "Unknown Program"
-} 
+}

@@ -82,28 +82,28 @@ func (s *Scraper) Run() error {
 		return fmt.Errorf("failed to get or create wallet: %w", result.Error)
 	}
 
-	// Get transaction signatures
-	txSigns, err := s.solanaClient.GetTransactionSigns(ctx, walletAddress, solana.Filters{})
+	var txs []*models.Transaction
+	var err error
+
+	// Use the new method to get transactions filtered by program ID
+	fmt.Printf("Fetching transactions for wallet %s\n", walletAddress)
+	txs, err = s.solanaClient.GetAndProcessTransactions(ctx, walletAddress, solana.Filters{}, s.db)
 	if err != nil {
-		return fmt.Errorf("failed to get transactions: %w", err)
+		return fmt.Errorf("failed to get and filter transactions: %w", err)
 	}
-
-	fmt.Printf("Found %d transactions for wallet %s\n", len(txSigns), walletAddress)
-
-	// Process transactions
-	txs, err := s.solanaClient.GetTransactionsInBulk(ctx, txSigns)
-	if err != nil {
-		return fmt.Errorf("failed to process transactions: %w", err)
-	}
-
 	fmt.Printf("Found %d transactions for wallet %s\n", len(txs), walletAddress)
+
+	// Save the transactions to the database
+	if len(txs) > 0 {
+		if err := solana.SaveTransactions(s.db, wallet.ID, txs); err != nil {
+			return fmt.Errorf("failed to save transactions: %w", err)
+		}
+		fmt.Printf("Saved %d transactions to the database\n", len(txs))
+	}
 
 	// Update wallet record with last scraped time
 	wallet.LastScraped = time.Now()
-	wallet.TransactionCount = len(txSigns)
-	if len(txSigns) > 0 {
-		wallet.LastScraped = time.Now()
-	}
+	wallet.TransactionCount = len(txs)
 
 	if err := s.db.Save(&wallet).Error; err != nil {
 		return fmt.Errorf("failed to update wallet record: %w", err)
