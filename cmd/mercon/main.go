@@ -3,10 +3,12 @@ package main
 import (
 	"flag"
 	"log"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/wnt/mercon/internal/database"
 	"github.com/wnt/mercon/internal/scraper"
+	"github.com/wnt/mercon/internal/services"
 )
 
 func main() {
@@ -23,6 +25,13 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
+
+	// Initialize the data enricher service
+	dataEnricher := services.NewMeteoraDataEnricher(db)
+
+	// Start regular USD data updates (update every 2 hours)
+	dataEnricher.ScheduleRegularUpdates(2 * time.Hour)
+	log.Println("Started USD data enrichment service")
 
 	s, err := scraper.NewScraper(db)
 	if err != nil {

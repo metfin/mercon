@@ -19,6 +19,17 @@ type MeteoraPair struct {
 	BinStep    uint16
 	Status     string `gorm:"size:20;default:'active'"`
 
+	// USD price information
+	CurrentPrice    float64
+	ReserveXUSD     float64
+	ReserveYUSD     float64
+	TVL             float64
+	Volume24h       float64
+	Fees24h         float64
+	APR             float64
+	APY             float64
+	LastPriceUpdate time.Time
+
 	// Relationships
 	Positions []MeteoraPosition `gorm:"foreignKey:PairID"`
 	Swaps     []MeteoraSwap     `gorm:"foreignKey:PairID"`
@@ -37,6 +48,14 @@ type MeteoraPosition struct {
 	CreatedAt  time.Time
 	ClosedAt   *time.Time
 	Status     string `gorm:"size:20;default:'active'"`
+
+	// USD value and performance metrics
+	TotalValueUSD      float64
+	DailyFeeYield      float64
+	FeeAPR24h          float64
+	FeeAPY24h          float64
+	TotalFeeUSDClaimed float64
+	LastDataUpdate     time.Time
 
 	// Relationships
 	LiquidityAdditions []MeteoraLiquidityAddition `gorm:"foreignKey:PositionID"`
@@ -66,6 +85,14 @@ type MeteoraSwap struct {
 	EndBinID      int32
 	SwapForY      bool // true if X->Y, false if Y->X
 
+	// USD values
+	AmountInUSD    float64
+	AmountOutUSD   float64
+	FeeUSD         float64
+	ProtocolFeeUSD float64
+	TokenPrice     float64
+	PriceImpact    float64
+
 	// Relationships
 	Transaction Transaction `gorm:"foreignKey:TransactionID"`
 	Wallet      Wallet      `gorm:"foreignKey:WalletID"`
@@ -83,6 +110,12 @@ type MeteoraLiquidityAddition struct {
 	AmountY       uint64
 	ActiveID      int32
 	AddTime       time.Time `gorm:"index"`
+
+	// USD values
+	AmountXUSD    float64
+	AmountYUSD    float64
+	TotalValueUSD float64
+	TokenPrice    float64
 
 	// Store distribution of liquidity to bins
 	BinDistribution string `gorm:"type:jsonb"`
@@ -103,6 +136,14 @@ type MeteoraLiquidityRemoval struct {
 	WalletID      uint      `gorm:"index;not null"`
 	User          string    `gorm:"size:44;index"`
 	RemoveTime    time.Time `gorm:"index"`
+
+	// USD values
+	AmountXRemoved    uint64
+	AmountYRemoved    uint64
+	AmountXRemovedUSD float64
+	AmountYRemovedUSD float64
+	TotalValueUSD     float64
+	TokenPrice        float64
 
 	// Store which bins had liquidity removed
 	BinReductions string `gorm:"type:jsonb"`
@@ -126,6 +167,12 @@ type MeteoraFeeClaim struct {
 	AmountY       uint64
 	ClaimTime     time.Time `gorm:"index"`
 
+	// USD values
+	AmountXUSD    float64
+	AmountYUSD    float64
+	TotalValueUSD float64
+	TokenPrice    float64
+
 	// Relationships
 	Transaction Transaction     `gorm:"foreignKey:TransactionID"`
 	Wallet      Wallet          `gorm:"foreignKey:WalletID"`
@@ -146,6 +193,11 @@ type MeteoraReward struct {
 	EndTime        time.Time
 	Status         string `gorm:"size:20;default:'active'"`
 
+	// USD values
+	RewardAmount     uint64
+	RewardAmountUSD  float64
+	RewardTokenPrice float64
+
 	// Relationships
 	Pair MeteoraPair `gorm:"foreignKey:PairID"`
 }
@@ -161,6 +213,10 @@ type MeteoraRewardFunding struct {
 	Amount        uint64
 	CarryForward  bool
 	FundTime      time.Time `gorm:"index"`
+
+	// USD values
+	AmountUSD        float64
+	RewardTokenPrice float64
 
 	// Relationships
 	Transaction Transaction   `gorm:"foreignKey:TransactionID"`
@@ -180,6 +236,10 @@ type MeteoraRewardClaim struct {
 	User          string `gorm:"size:44;index"`
 	Amount        uint64
 	ClaimTime     time.Time `gorm:"index"`
+
+	// USD values
+	AmountUSD        float64
+	RewardTokenPrice float64
 
 	// Relationships
 	Transaction Transaction     `gorm:"foreignKey:TransactionID"`

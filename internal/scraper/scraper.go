@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/wnt/mercon/internal/models"
+	"github.com/wnt/mercon/internal/services"
 	"github.com/wnt/mercon/internal/solana"
 	"gorm.io/gorm"
 )
@@ -17,6 +18,7 @@ type Scraper struct {
 	db             *gorm.DB
 	solanaClient   *solana.Client
 	txParser       *solana.TransactionParser
+	dataEnricher   *services.MeteoraDataEnricher
 	maxConcurrent  int
 	requestTimeout time.Duration
 }
@@ -50,10 +52,14 @@ func NewScraper(db *gorm.DB) (*Scraper, error) {
 	// Create transaction parser
 	txParser := solana.NewTransactionParser(db, solanaClient)
 
+	// Create data enricher
+	dataEnricher := services.NewMeteoraDataEnricher(db)
+
 	return &Scraper{
 		db:             db,
 		solanaClient:   solanaClient,
 		txParser:       txParser,
+		dataEnricher:   dataEnricher,
 		maxConcurrent:  maxConcurrent,
 		requestTimeout: timeout,
 	}, nil
@@ -109,6 +115,27 @@ func (s *Scraper) Run() error {
 		return fmt.Errorf("failed to update wallet record: %w", err)
 	}
 
+	// Perform initial data enrichment
+	fmt.Println("Enriching data with USD values...")
+	s.enrichData()
+
 	fmt.Println("Scraping completed successfully")
 	return nil
+}
+
+// enrichData performs data enrichment for all entities
+func (s *Scraper) enrichData() {
+	// Enrich pairs with USD values
+	if err := s.dataEnricher.EnrichPairs(); err != nil {
+		fmt.Printf("Warning: Failed to enrich pairs with USD values: %v\n", err)
+	} else {
+		fmt.Println("Successfully enriched pairs with USD values")
+	}
+
+	// Enrich positions with performance metrics
+	if err := s.dataEnricher.EnrichPositions(); err != nil {
+		fmt.Printf("Warning: Failed to enrich positions with USD values: %v\n", err)
+	} else {
+		fmt.Println("Successfully enriched positions with USD values")
+	}
 }

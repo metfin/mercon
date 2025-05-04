@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/wnt/mercon/internal/models"
+	"github.com/wnt/mercon/internal/services"
 	"gorm.io/gorm"
 )
 
@@ -17,15 +18,17 @@ const (
 
 // TransactionParser handles parsing and saving transaction data
 type TransactionParser struct {
-	db     *gorm.DB
-	client *Client
+	db           *gorm.DB
+	client       *Client
+	dataEnricher *services.MeteoraDataEnricher
 }
 
 // NewTransactionParser creates a new transaction parser
 func NewTransactionParser(db *gorm.DB, client *Client) *TransactionParser {
 	return &TransactionParser{
-		db:     db,
-		client: client,
+		db:           db,
+		client:       client,
+		dataEnricher: services.NewMeteoraDataEnricher(db),
 	}
 }
 
@@ -95,6 +98,12 @@ func (p *TransactionParser) ProcessTransaction(ctx context.Context, tx *models.T
 		if err != nil {
 			return fmt.Errorf("failed to parse %s instruction: %w", instructionType, err)
 		}
+	}
+
+	// After processing all instructions, enrich the data with USD values
+	if err := p.dataEnricher.PostProcessTransaction(tx); err != nil {
+		fmt.Printf("Warning: failed to enrich transaction data with USD values: %v\n", err)
+		// Continue processing even if USD enrichment fails
 	}
 
 	return nil
