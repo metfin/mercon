@@ -58,15 +58,17 @@ func migrateSchema(db *gorm.DB) error {
 	// Migrate models
 	if err := db.AutoMigrate(
 		&models.Wallet{},
-		&models.Position{},
 		&models.Transaction{},
 		&models.TransactionInstruction{},
 		&models.TransactionAccount{},
-		&models.PositionRecord{},
-		&models.PositionClaimFee{},
-		&models.PositionClaimReward{},
-		&models.PositionDeposit{},
-		&models.PositionWithdraw{},
+		&models.MeteoraPosition{},
+		&models.MeteoraSwap{},
+		&models.MeteoraLiquidityAddition{},
+		&models.MeteoraLiquidityRemoval{},
+		&models.MeteoraFeeClaim{},
+		&models.MeteoraReward{},
+		&models.MeteoraRewardFunding{},
+		&models.MeteoraRewardClaim{},
 	); err != nil {
 		return fmt.Errorf("failed to migrate database: %w", err)
 	}

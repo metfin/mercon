@@ -17,6 +17,12 @@ type Wallet struct {
 	LastScraped        time.Time
 
 	// Relationships
-	Transactions []Transaction `gorm:"foreignKey:WalletID"`
-	Positions    []Position    `gorm:"foreignKey:WalletID"`
+	Transactions       []Transaction              `gorm:"foreignKey:WalletID"`
+	Positions          []MeteoraPosition          `gorm:"foreignKey:WalletID"`
+	Swaps              []MeteoraSwap              `gorm:"foreignKey:WalletID"`
+	LiquidityAdditions []MeteoraLiquidityAddition `gorm:"foreignKey:WalletID"`
+	LiquidityRemovals  []MeteoraLiquidityRemoval  `gorm:"foreignKey:WalletID"`
+	FeeClaims          []MeteoraFeeClaim          `gorm:"foreignKey:WalletID"`
+	RewardClaims       []MeteoraRewardClaim       `gorm:"foreignKey:WalletID"`
+	RewardFundings     []MeteoraRewardFunding     `gorm:"foreignKey:WalletID"`
 }

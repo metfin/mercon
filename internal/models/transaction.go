@@ -11,10 +11,8 @@ type Transaction struct {
 	gorm.Model
 	Signature            string    `gorm:"size:88;uniqueIndex;not null"`
 	BlockTime            time.Time `gorm:"index"`
-	Fee                  int64     // Store in lamports instead of float64
-	FeeInSol             float64
-	PriorityFee          int64 // Store in lamports instead of float64
-	PriorityFeeInSol     float64
+	Fee                  int64     // Store in lamports
+	PriorityFee          int64     // Store in lamports
 	Confirmations        uint64
 	ComputeUnitsConsumed uint64
 	RecentBlockhash      string   `gorm:"size:88"`
@@ -25,8 +23,15 @@ type Transaction struct {
 	RawData              string   `gorm:"type:jsonb"`
 
 	// Relationships
-	Instructions []TransactionInstruction `gorm:"foreignKey:TransactionID"`
-	AccountKeys  []TransactionAccount     `gorm:"foreignKey:TransactionID"`
+	Instructions        []TransactionInstruction   `gorm:"foreignKey:TransactionID"`
+	AccountKeys         []TransactionAccount       `gorm:"foreignKey:TransactionID"`
+	MeteoraSwaps        []MeteoraSwap              `gorm:"foreignKey:TransactionID"`
+	MeteoraAdditions    []MeteoraLiquidityAddition `gorm:"foreignKey:TransactionID"`
+	MeteoraRemovals     []MeteoraLiquidityRemoval  `gorm:"foreignKey:TransactionID"`
+	MeteoraFeeClaims    []MeteoraFeeClaim          `gorm:"foreignKey:TransactionID"`
+	MeteoraRewardClaims []MeteoraRewardClaim       `gorm:"foreignKey:TransactionID"`
+	MeteoraRewardFunds  []MeteoraRewardFunding     `gorm:"foreignKey:TransactionID"`
+	Wallet              Wallet                     `gorm:"foreignKey:WalletID"`
 }
 
 // TransactionInstruction represents instruction-specific details within a transaction
@@ -42,6 +47,9 @@ type TransactionInstruction struct {
 	InnerInstructions string `gorm:"type:jsonb"`
 	Info              string `gorm:"type:jsonb"`
 	StackHeight       *int   // Using pointer to handle null values
+
+	// Relationship
+	Transaction Transaction `gorm:"foreignKey:TransactionID"`
 }
 
 // TransactionAccount represents an account involved in a transaction
@@ -52,4 +60,23 @@ type TransactionAccount struct {
 	Signer        bool   `gorm:"index"`
 	Source        string `gorm:"size:20"`
 	Writable      bool   `gorm:"index"`
+
+	// Relationship
+	Transaction Transaction `gorm:"foreignKey:TransactionID"`
+}
+
+// Helper methods to convert between lamports and SOL
+func (t *Transaction) FeeInSOL() float64 {
+	return float64(t.Fee) / 1000000000.0
+}
+
+func (t *Transaction) PriorityFeeInSOL() float64 {
+	return float64(t.PriorityFee) / 1000000000.0
+}
+
+// BeforeSave hook to calculate SOL values before saving
+func (t *Transaction) BeforeSave(tx *gorm.DB) error {
+	// These will be used for display/querying but aren't stored directly
+	// Will be calculated on-the-fly by the helper methods above
+	return nil
 }
