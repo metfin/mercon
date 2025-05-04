@@ -151,52 +151,82 @@ func (c *Client) GetTransactionsInBulk(ctx context.Context, signatures []string)
 	client := utils.NewHTTPClient()
 
 	var transactions []*models.Transaction
-	var txRequests []map[string]interface{}
-	for _, signature := range signatures {
-		// Prepare the request body for each signature
-		requestBody := map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      "mercon-client",
-			"method":  "getTransaction",
-			"params": []interface{}{signature, map[string]interface{}{
-				"encoding":                       "jsonParsed",
-				"maxSupportedTransactionVersion": 0,
-			}},
+
+	if len(signatures) == 0 {
+		return transactions, nil
+	}
+
+	// For batch processing, we need to send individual requests
+	// Process in reasonable batch sizes to avoid too large requests
+
+	batchSize := 500
+	for i := 0; i < len(signatures); i += batchSize {
+		end := i + batchSize
+		if end > len(signatures) {
+			end = len(signatures)
 		}
 
-		txRequests = append(txRequests, requestBody)
-	}
+		fmt.Printf("Processing batch %d of %d\n", i/batchSize+1, len(signatures)/batchSize)
 
-	requestBodyJSON, err := json.Marshal(txRequests)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal request body to JSON: %w", err)
-	}
-	fmt.Println(string(requestBodyJSON))
+		currentBatch := signatures[i:end]
+		var txRequests []map[string]interface{}
 
-	// Make the HTTP request for each signature
-	resp, err := client.Post(c.endpoint, requestBodyJSON, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get transaction: %w", err)
-	}
+		for _, signature := range currentBatch {
+			// Prepare the request body for each signature
+			requestBody := map[string]interface{}{
+				"jsonrpc": "2.0",
+				"id":      signature, // Using signature as ID to match responses
+				"method":  "getTransaction",
+				"params": []interface{}{signature, map[string]interface{}{
+					"encoding":                       "jsonParsed",
+					"maxSupportedTransactionVersion": 0,
+				}},
+			}
 
-	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("RPC request failed with status code: %d", resp.StatusCode)
-	}
+			txRequests = append(txRequests, requestBody)
+		}
 
-	// Define a proper structure to unmarshal the response
-	var response []RPCResponse
-
-	if err := json.Unmarshal(resp.Body, &response); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal transaction: %w", err)
-	}
-
-	// Convert RPC response to our Transaction model
-	for i, resp := range response {
-		transaction, err := convertToTransaction(resp, signatures[i])
+		// Send the batch request
+		resp, err := client.Post(c.endpoint, txRequests, nil)
 		if err != nil {
-			return nil, fmt.Errorf("failed to convert transaction: %w", err)
+			return nil, fmt.Errorf("failed to get transactions: %w", err)
 		}
-		transactions = append(transactions, transaction)
+
+		if resp.StatusCode != 200 {
+			return nil, fmt.Errorf("RPC request failed with status code: %d", resp.StatusCode)
+		}
+
+		// Define a proper structure to unmarshal the response
+		var responses []RPCResponse
+
+		if err := json.Unmarshal(resp.Body, &responses); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal transactions: %w", err)
+		}
+
+		// Build a map of responses by ID for easier lookup
+		responseMap := make(map[string]RPCResponse)
+		for _, response := range responses {
+			responseMap[response.ID] = response
+		}
+
+		// Process each signature in the order they were sent
+		failedCount := 0
+		for _, signature := range currentBatch {
+			if response, ok := responseMap[signature]; ok && response.Error.Message == "" {
+				transaction, err := convertToTransaction(response, signature)
+				if err != nil {
+					return nil, fmt.Errorf("failed to convert transaction %s: %w", signature, err)
+				}
+				transactions = append(transactions, transaction)
+			} else {
+				failedCount++
+			}
+		}
+
+		fmt.Printf("Processed batch %d of %d\n", i/batchSize+1, len(signatures)/batchSize)
+		fmt.Printf("Failed count: %d\n", failedCount)
+		// Sleep for 1 second to avoid rate limiting
+		time.Sleep(1 * time.Second)
 	}
 
 	return transactions, nil
