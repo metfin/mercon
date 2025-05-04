@@ -91,6 +91,12 @@ func (s *Scraper) Run() error {
 	fmt.Printf("Found %d transactions for wallet %s\n", len(txSigns), walletAddress)
 
 	// Process transactions
+	txs, err := s.solanaClient.GetTransactionsInBulk(ctx, txSigns)
+	if err != nil {
+		return fmt.Errorf("failed to process transactions: %w", err)
+	}
+
+	fmt.Printf("Found %d transactions for wallet %s\n", len(txs), walletAddress)
 
 	// Update wallet record with last scraped time
 	wallet.LastScraped = time.Now()

@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 
 	"github.com/joho/godotenv"
@@ -33,6 +32,4 @@ func main() {
 	if err := s.Run(); err != nil {
 		log.Fatalf("Scraper failed: %v", err)
 	}
-
-	fmt.Println("Scraping completed successfully")
 }
