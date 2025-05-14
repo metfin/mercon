@@ -3,7 +3,6 @@ package services
 import (
 	"fmt"
 
-	"github.com/wnt/mercon/internal/constants"
 	"github.com/wnt/mercon/internal/utils"
 )
 
@@ -15,7 +14,6 @@ type MeteoraPubClient struct {
 func NewMeteoraPubClient() *MeteoraPubClient {
 	return &MeteoraPubClient{
 		httpClient: utils.NewHTTPClient(
-			utils.WithBaseURL(constants.MeteoraPubBaseURL),
 			utils.WithDefaultHeaders(map[string]string{
 				"Content-Type": "application/json",
 			}),

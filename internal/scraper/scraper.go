@@ -50,7 +50,7 @@ func NewScraper(db *gorm.DB) (*Scraper, error) {
 	}
 
 	// Create transaction parser
-	txParser := solana.NewTransactionParser(db, solanaClient)
+	txParser := solana.NewTransactionParser(solanaClient)
 
 	// Create data enricher
 	dataEnricher := services.NewMeteoraDataEnricher(db)
@@ -93,7 +93,7 @@ func (s *Scraper) Run() error {
 
 	// Use the new method to get transactions filtered by program ID
 	fmt.Printf("Fetching transactions for wallet %s\n", walletAddress)
-	txs, err = s.solanaClient.GetAndProcessTransactions(ctx, walletAddress, solana.Filters{}, s.db)
+	txs, err = s.solanaClient.GetAndParseTransactions(ctx, walletAddress, solana.Filters{})
 	if err != nil {
 		return fmt.Errorf("failed to get and filter transactions: %w", err)
 	}

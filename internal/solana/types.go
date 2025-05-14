@@ -1,102 +1,173 @@
 package solana
 
-type RPCResponse struct {
-	JSONRPC string `json:"jsonrpc"`
-	Result  Result `json:"result"`
-	ID      string `json:"id"`
-	Error   struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
-type Result struct {
-	BlockTime   int64       `json:"blockTime"`
-	Meta        Meta        `json:"meta"`
-	Transaction Transaction `json:"transaction"`
-}
-
 type Transaction struct {
-	Message    Message  `json:"message"`
-	Signatures []string `json:"signatures"`
+	Description      string            `json:"description"`
+	Type             string            `json:"type"`
+	Source           string            `json:"source"`
+	Fee              int64             `json:"fee"`
+	FeePayer         string            `json:"feePayer"`
+	Signature        string            `json:"signature"`
+	Slot             int64             `json:"slot"`
+	Timestamp        int64             `json:"timestamp"`
+	NativeTransfers  []NativeTransfer  `json:"nativeTransfers"`
+	TokenTransfers   []TokenTransfer   `json:"tokenTransfers"`
+	AccountData      []AccountData     `json:"accountData"`
+	TransactionError *TransactionError `json:"transactionError"`
+	Instructions     []Instruction     `json:"instructions"`
+	Events           Events            `json:"events"`
 }
 
-type Message struct {
-	AccountKeys     []AccountKey  `json:"accountKeys"`
-	Instructions    []Instruction `json:"instructions"`
-	RecentBlockhash string        `json:"recentBlockhash"`
-	Header          MessageHeader `json:"header"`
+type NativeTransfer struct {
+	FromUserAccount string `json:"fromUserAccount"`
+	ToUserAccount   string `json:"toUserAccount"`
+	Amount          int64  `json:"amount"`
 }
 
-type AccountKey struct {
-	Pubkey   string `json:"pubkey"`
-	Signer   bool   `json:"signer"`
-	Source   string `json:"source"`
-	Writable bool   `json:"writable"`
+type TokenTransfer struct {
+	FromUserAccount  string `json:"fromUserAccount"`
+	ToUserAccount    string `json:"toUserAccount"`
+	FromTokenAccount string `json:"fromTokenAccount"`
+	ToTokenAccount   string `json:"toTokenAccount"`
+	TokenAmount      int64  `json:"tokenAmount"`
+	Mint             string `json:"mint"`
 }
 
-type MessageHeader struct {
-	NumRequiredSignatures       int `json:"numRequiredSignatures"`
-	NumReadonlySignedAccounts   int `json:"numReadonlySignedAccounts"`
-	NumReadonlyUnsignedAccounts int `json:"numReadonlyUnsignedAccounts"`
+type AccountData struct {
+	Account             string               `json:"account"`
+	NativeBalanceChange int64                `json:"nativeBalanceChange"`
+	TokenBalanceChanges []TokenBalanceChange `json:"tokenBalanceChanges"`
 }
 
-type Meta struct {
-	ComputeUnitsConsumed int64              `json:"computeUnitsConsumed"`
-	Err                  interface{}        `json:"err"`
-	Fee                  int64              `json:"fee"`
-	InnerInstructions    []InnerInstruction `json:"innerInstructions"`
-	LogMessages          []string           `json:"logMessages,omitempty"`
-	PostBalances         []int64            `json:"postBalances,omitempty"`
-	PreBalances          []int64            `json:"preBalances,omitempty"`
-	PriorityFee          int64              `json:"priorityFee,omitempty"`
-	Status               TransactionStatus  `json:"status,omitempty"`
+type TokenBalanceChange struct {
+	UserAccount    string         `json:"userAccount"`
+	TokenAccount   string         `json:"tokenAccount"`
+	Mint           string         `json:"mint"`
+	RawTokenAmount RawTokenAmount `json:"rawTokenAmount"`
 }
 
-type TransactionStatus struct {
-	Ok  interface{} `json:"Ok,omitempty"`
-	Err interface{} `json:"Err,omitempty"`
+type RawTokenAmount struct {
+	TokenAmount string `json:"tokenAmount"`
+	Decimals    int    `json:"decimals"`
 }
 
-type InnerInstruction struct {
-	Index        int           `json:"index"`
-	Instructions []Instruction `json:"instructions"`
+type TransactionError struct {
+	Error string `json:"error"`
 }
 
 type Instruction struct {
-	Parsed      *Parsed  `json:"parsed,omitempty"`
-	Program     string   `json:"program"`
-	ProgramID   string   `json:"programId"`
-	StackHeight int      `json:"stackHeight"`
-	Accounts    []string `json:"accounts,omitempty"`
-	Data        string   `json:"data,omitempty"`
+	Accounts          []string           `json:"accounts"`
+	Data              string             `json:"data"`
+	ProgramId         string             `json:"programId"`
+	InnerInstructions []InnerInstruction `json:"innerInstructions"`
 }
 
-type Parsed struct {
-	Info Info   `json:"info"`
-	Type string `json:"type"`
+type InnerInstruction struct {
+	Accounts  []string `json:"accounts"`
+	Data      string   `json:"data"`
+	ProgramId string   `json:"programId"`
 }
 
-type Info struct {
-	// These fields vary depending on the instruction type.
-	// We'll use json.RawMessage or interface{} for flexible parsing,
-	// or define a union struct with pointers.
-	ExtensionTypes []string     `json:"extensionTypes,omitempty"`
-	Mint           string       `json:"mint,omitempty"`
-	Lamports       int64        `json:"lamports,omitempty"`
-	NewAccount     string       `json:"newAccount,omitempty"`
-	Owner          string       `json:"owner,omitempty"`
-	Source         string       `json:"source,omitempty"`
-	Space          int          `json:"space,omitempty"`
-	Account        string       `json:"account,omitempty"`
-	Destination    string       `json:"destination,omitempty"`
-	Authority      string       `json:"authority,omitempty"`
-	TokenAmount    *TokenAmount `json:"tokenAmount,omitempty"`
+type Events struct {
+	NFT                          *NFTEvent               `json:"nft"`
+	Swap                         *SwapEvent              `json:"swap"`
+	Compressed                   *CompressedEvent        `json:"compressed"`
+	DistributeCompressionRewards *CompressionRewardEvent `json:"distributeCompressionRewards"`
+	SetAuthority                 *SetAuthorityEvent      `json:"setAuthority"`
 }
 
-type TokenAmount struct {
-	Amount         string  `json:"amount"`
-	Decimals       int     `json:"decimals"`
-	UIAmount       float64 `json:"uiAmount"`
-	UIAmountString string  `json:"uiAmountString"`
+type NFTEvent struct {
+	Description string    `json:"description"`
+	Type        string    `json:"type"`
+	Source      string    `json:"source"`
+	Amount      int64     `json:"amount"`
+	Fee         int64     `json:"fee"`
+	FeePayer    string    `json:"feePayer"`
+	Signature   string    `json:"signature"`
+	Slot        int64     `json:"slot"`
+	Timestamp   int64     `json:"timestamp"`
+	SaleType    string    `json:"saleType"`
+	Buyer       string    `json:"buyer"`
+	Seller      string    `json:"seller"`
+	Staker      string    `json:"staker"`
+	NFTs        []NFTItem `json:"nfts"`
+}
+
+type NFTItem struct {
+	Mint          string `json:"mint"`
+	TokenStandard string `json:"tokenStandard"`
+}
+
+type SwapEvent struct {
+	NativeInput  NativeSwapInfo   `json:"nativeInput"`
+	NativeOutput NativeSwapInfo   `json:"nativeOutput"`
+	TokenInputs  []TokenSwapInfo  `json:"tokenInputs"`
+	TokenOutputs []TokenSwapInfo  `json:"tokenOutputs"`
+	TokenFees    []TokenSwapInfo  `json:"tokenFees"`
+	NativeFees   []NativeSwapInfo `json:"nativeFees"`
+	InnerSwaps   []InnerSwap      `json:"innerSwaps"`
+}
+
+type NativeSwapInfo struct {
+	Account string `json:"account"`
+	Amount  string `json:"amount"`
+}
+
+type TokenSwapInfo struct {
+	UserAccount    string         `json:"userAccount"`
+	TokenAccount   string         `json:"tokenAccount"`
+	Mint           string         `json:"mint"`
+	RawTokenAmount RawTokenAmount `json:"rawTokenAmount"`
+}
+
+type InnerSwap struct {
+	TokenInputs  []InnerSwapTransfer `json:"tokenInputs"`
+	TokenOutputs []InnerSwapTransfer `json:"tokenOutputs"`
+	TokenFees    []InnerSwapTransfer `json:"tokenFees"`
+	NativeFees   []InnerSwapNative   `json:"nativeFees"`
+	ProgramInfo  SwapProgramInfo     `json:"programInfo"`
+}
+
+type InnerSwapTransfer struct {
+	FromUserAccount  string `json:"fromUserAccount"`
+	ToUserAccount    string `json:"toUserAccount"`
+	FromTokenAccount string `json:"fromTokenAccount"`
+	ToTokenAccount   string `json:"toTokenAccount"`
+	TokenAmount      int64  `json:"tokenAmount"`
+	Mint             string `json:"mint"`
+}
+
+type InnerSwapNative struct {
+	FromUserAccount string `json:"fromUserAccount"`
+	ToUserAccount   string `json:"toUserAccount"`
+	Amount          int64  `json:"amount"`
+}
+
+type SwapProgramInfo struct {
+	Source          string `json:"source"`
+	Account         string `json:"account"`
+	ProgramName     string `json:"programName"`
+	InstructionName string `json:"instructionName"`
+}
+
+type CompressedEvent struct {
+	Type                  string `json:"type"`
+	TreeId                string `json:"treeId"`
+	AssetId               string `json:"assetId"`
+	LeafIndex             int    `json:"leafIndex"`
+	InstructionIndex      int    `json:"instructionIndex"`
+	InnerInstructionIndex int    `json:"innerInstructionIndex"`
+	NewLeafOwner          string `json:"newLeafOwner"`
+	OldLeafOwner          string `json:"oldLeafOwner"`
+}
+
+type CompressionRewardEvent struct {
+	Amount int `json:"amount"`
+}
+
+type SetAuthorityEvent struct {
+	Account               string `json:"account"`
+	From                  string `json:"from"`
+	To                    string `json:"to"`
+	InstructionIndex      int    `json:"instructionIndex"`
+	InnerInstructionIndex int    `json:"innerInstructionIndex"`
 }

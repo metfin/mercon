@@ -2,881 +2,786 @@ package solana
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/base64"
+	"encoding/binary"
 	"fmt"
 	"time"
 
+	"github.com/wnt/mercon/internal/constants"
 	"github.com/wnt/mercon/internal/models"
-	"github.com/wnt/mercon/internal/services"
-	"gorm.io/gorm"
 )
 
-// Constants for program IDs
-const (
-	MeteoraProgram = "LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo"
-)
-
-// TransactionParser handles parsing and saving transaction data
-type TransactionParser struct {
-	db           *gorm.DB
-	client       *Client
-	dataEnricher *services.MeteoraDataEnricher
-}
-
-// NewTransactionParser creates a new transaction parser
-func NewTransactionParser(db *gorm.DB, client *Client) *TransactionParser {
+// NewTransactionParser creates a new parser for processing transactions
+func NewTransactionParser(client *Client) *TransactionParser {
 	return &TransactionParser{
-		db:           db,
-		client:       client,
-		dataEnricher: services.NewMeteoraDataEnricher(db),
+		Client: client,
 	}
 }
 
-// ProcessTransaction parses a transaction and stores it in the database
-func (p *TransactionParser) ProcessTransaction(ctx context.Context, tx *models.Transaction) error {
-	if tx == nil {
-		return fmt.Errorf("transaction data is nil")
-	}
+// TransactionParser processes Solana transactions
+type TransactionParser struct {
+	Client *Client
+}
 
-	// Check if any of the instructions are a Meteora DLMM transaction.
-	meteoraInstructions := []models.TransactionInstruction{}
+// MeteoraTxType represents the type of Meteora transaction
+type MeteoraTxType uint8
+
+const (
+	MeteoraTxUnknown MeteoraTxType = iota
+	MeteoraTxSwap
+	MeteoraTxAddLiquidity
+	MeteoraTxRemoveLiquidity
+	MeteoraTxClaimFee
+	MeteoraTxClaimReward
+	MeteoraTxFundReward
+	MeteoraTxInitializePosition
+	MeteoraTxClosePosition
+	MeteoraTxInitializePair
+)
+
+// ProcessTransaction processes a transaction and extracts relevant Meteora data
+func (p *TransactionParser) ProcessTransaction(ctx context.Context, tx Transaction) (*models.Transaction, error) {
+	// First we filter all the non-meteora tx instructions
+	meteoraInstructions := make([]Instruction, 0)
 	for _, instruction := range tx.Instructions {
-		if instruction.ProgramID == MeteoraProgram {
+		if instruction.ProgramId == constants.MeteoraDLMM {
 			meteoraInstructions = append(meteoraInstructions, instruction)
 		}
 	}
 
 	if len(meteoraInstructions) == 0 {
+		return nil, fmt.Errorf("no meteora instructions found in transaction %s", tx.Signature)
+	}
+
+	// Create the base transaction model
+	txModel := &models.Transaction{
+		Signature:   tx.Signature,
+		BlockTime:   UnixTimeToTime(tx.Timestamp),
+		Slot:        tx.Slot,
+		Description: tx.Description,
+		Type:        tx.Type,
+		Source:      tx.Source,
+		Fee:         tx.Fee,
+		FeePayer:    tx.FeePayer,
+	}
+
+	if tx.TransactionError != nil {
+		txModel.Error = tx.TransactionError.Error
+	}
+
+	// Process each Meteora instruction
+	for i, instruction := range meteoraInstructions {
+		err := p.processMeteoraTxInstruction(ctx, instruction, txModel, i)
+		if err != nil {
+			return nil, fmt.Errorf("error processing meteora instruction: %v", err)
+		}
+	}
+
+	return txModel, nil
+}
+
+// processMeteoraTxInstruction processes a single Meteora instruction and updates the transaction model
+func (p *TransactionParser) processMeteoraTxInstruction(ctx context.Context, instruction Instruction, txModel *models.Transaction, index int) error {
+	// Decode instruction type from the first byte of data
+	data, err := base64.StdEncoding.DecodeString(instruction.Data)
+	if err != nil {
+		return fmt.Errorf("error decoding instruction data: %v", err)
+	}
+
+	if len(data) == 0 {
+		return fmt.Errorf("empty instruction data")
+	}
+
+	// The first byte is the instruction discriminator
+	instructionType := data[0]
+
+	// Process based on instruction type
+	switch instructionType {
+	case 16: // swap
+		return p.parseSwap(ctx, instruction, data, txModel)
+	case 17: // swapExactOut
+		return p.parseSwapExactOut(ctx, instruction, data, txModel)
+	case 6: // addLiquidity
+		return p.parseAddLiquidity(ctx, instruction, data, txModel)
+	case 7: // addLiquidityByWeight
+		return p.parseAddLiquidityByWeight(ctx, instruction, data, txModel)
+	case 8: // addLiquidityByStrategy
+		return p.parseAddLiquidityByStrategy(ctx, instruction, data, txModel)
+	case 9: // addLiquidityByStrategyOneSide
+		return p.parseAddLiquidityByStrategyOneSide(ctx, instruction, data, txModel)
+	case 11: // removeLiquidity
+		return p.parseRemoveLiquidity(ctx, instruction, data, txModel)
+	case 25: // claimFee
+		return p.parseClaimFee(ctx, instruction, data, txModel)
+	case 24: // claimReward
+		return p.parseClaimReward(ctx, instruction, data, txModel)
+	case 21: // fundReward
+		return p.parseFundReward(ctx, instruction, data, txModel)
+	case 12, 13, 14: // initializePosition variants
+		return p.parseInitializePosition(ctx, instruction, data, txModel)
+	case 26: // closePosition
+		return p.parseClosePosition(ctx, instruction, data, txModel)
+	case 1, 2, 3: // initialize pair variants
+		return p.parseInitializePair(ctx, instruction, data, txModel)
+	default:
+		// Other instruction types not explicitly handled
 		return nil
 	}
-
-	fmt.Println("Transaction: ", tx.Signature)
-
-	// Loop through the instructions, find out the type of the instruction, and parse it accordingly
-	for _, instruction := range meteoraInstructions {
-		// Unmarshal the instruction data
-		var instructionData map[string]interface{}
-		err := json.Unmarshal([]byte(instruction.Data), &instructionData)
-		if err != nil {
-			return fmt.Errorf("failed to unmarshal instruction data: %w", err)
-		}
-
-		// Extract instruction type from discriminator (first field in Anchor instruction data)
-		instructionType, err := p.getInstructionType(instructionData)
-		if err != nil {
-			return fmt.Errorf("failed to determine instruction type: %w", err)
-		}
-
-		fmt.Printf("Instruction Type: %s\n", instructionType)
-
-		// Parse instruction data based on the instruction type
-		switch instructionType {
-		case "initializeLbPair":
-			err = p.parseInitializeLbPair(tx, instruction, instructionData)
-		case "swap":
-			err = p.parseSwap(tx, instruction, instructionData)
-		case "addLiquidity":
-			err = p.parseAddLiquidity(tx, instruction, instructionData)
-		case "removeLiquidity":
-			err = p.parseRemoveLiquidity(tx, instruction, instructionData)
-		case "initializePosition":
-			err = p.parseInitializePosition(tx, instruction, instructionData)
-		case "claimFee":
-			err = p.parseClaimFee(tx, instruction, instructionData)
-		case "closePosition":
-			err = p.parseClosePosition(tx, instruction, instructionData)
-		case "initializeReward":
-			err = p.parseInitializeReward(tx, instruction, instructionData)
-		case "fundReward":
-			err = p.parseFundReward(tx, instruction, instructionData)
-		case "claimReward":
-			err = p.parseClaimReward(tx, instruction, instructionData)
-		default:
-			fmt.Printf("Unhandled instruction type: %s\n", instructionType)
-		}
-
-		if err != nil {
-			return fmt.Errorf("failed to parse %s instruction: %w", instructionType, err)
-		}
-	}
-
-	// After processing all instructions, enrich the data with USD values
-	if err := p.dataEnricher.PostProcessTransaction(tx); err != nil {
-		fmt.Printf("Warning: failed to enrich transaction data with USD values: %v\n", err)
-		// Continue processing even if USD enrichment fails
-	}
-
-	return nil
 }
 
-// extractAccounts extracts account addresses from an instruction
-func extractAccounts(instruction models.TransactionInstruction) ([]string, error) {
-	var accounts []string
-	err := json.Unmarshal([]byte(instruction.Accounts), &accounts)
-	if err != nil {
-		return nil, fmt.Errorf("failed to unmarshal accounts: %w", err)
-	}
-	return accounts, nil
-}
-
-// findOrCreateWallet finds or creates a wallet and returns its ID
-func (p *TransactionParser) findOrCreateWallet(address string) (uint, error) {
-	var wallet models.Wallet
-	if err := p.db.Where("address = ?", address).FirstOrCreate(&wallet, models.Wallet{Address: address}).Error; err != nil {
-		return 0, fmt.Errorf("failed to find/create wallet: %w", err)
-	}
-	return wallet.ID, nil
-}
-
-// findPair finds a Meteora pair by address and returns it
-func (p *TransactionParser) findPair(address string) (models.MeteoraPair, error) {
-	var pair models.MeteoraPair
-	if err := p.db.Where("address = ?", address).First(&pair).Error; err != nil {
-		return pair, fmt.Errorf("failed to find Meteora pair: %w", err)
-	}
-	return pair, nil
-}
-
-// findPosition finds a Meteora position by address and returns it
-func (p *TransactionParser) findPosition(address string) (models.MeteoraPosition, error) {
-	var position models.MeteoraPosition
-	if err := p.db.Where("address = ?", address).First(&position).Error; err != nil {
-		return position, fmt.Errorf("failed to find Meteora position: %w", err)
-	}
-	return position, nil
-}
-
-// findReward finds a Meteora reward by pair and index
-func (p *TransactionParser) findReward(pairID uint, rewardIndex uint64) (models.MeteoraReward, error) {
-	var reward models.MeteoraReward
-	if err := p.db.Where("pair_id = ? AND reward_index = ?", pairID, rewardIndex).First(&reward).Error; err != nil {
-		return reward, fmt.Errorf("failed to find Meteora reward: %w", err)
-	}
-	return reward, nil
-}
-
-// extractUint64 extracts a uint64 value from data
-func extractUint64(data map[string]interface{}, key string) uint64 {
-	var value uint64
-	if val, ok := data[key]; ok {
-		if strVal, ok := val.(string); ok {
-			fmt.Sscanf(strVal, "%d", &value)
-		} else if floatVal, ok := val.(float64); ok {
-			value = uint64(floatVal)
-		}
-	}
-	return value
-}
-
-// extractInt32 extracts an int32 value from data
-func extractInt32(data map[string]interface{}, key string) int32 {
-	var value int32
-	if val, ok := data[key]; ok {
-		if floatVal, ok := val.(float64); ok {
-			value = int32(floatVal)
-		}
-	}
-	return value
-}
-
-// extractUint16 extracts a uint16 value from data
-func extractUint16(data map[string]interface{}, key string) uint16 {
-	var value uint16
-	if val, ok := data[key]; ok {
-		if floatVal, ok := val.(float64); ok {
-			value = uint16(floatVal)
-		}
-	}
-	return value
-}
-
-// extractBool extracts a boolean value from data
-func extractBool(data map[string]interface{}, key string) bool {
-	var value bool
-	if val, ok := data[key]; ok {
-		if boolVal, ok := val.(bool); ok {
-			value = boolVal
-		}
-	}
-	return value
-}
-
-// getInstructionType determines the Meteora DLMM instruction type
-func (p *TransactionParser) getInstructionType(instructionData map[string]interface{}) (string, error) {
-	// In Anchor-based programs, the instruction discriminator is the first field
-	// This is a simplified approach
-
-	// Common instruction types from Meteora DLMM
-	instructionTypes := map[string]string{
-		"0":  "initializeLbPair",
-		"1":  "initializePermissionLbPair",
-		"2":  "initializeCustomizablePermissionlessLbPair",
-		"3":  "initializeBinArrayBitmapExtension",
-		"4":  "initializeBinArray",
-		"5":  "addLiquidity",
-		"6":  "addLiquidityByWeight",
-		"7":  "addLiquidityByStrategy",
-		"8":  "addLiquidityByStrategyOneSide",
-		"9":  "addLiquidityOneSide",
-		"10": "removeLiquidity",
-		"11": "initializePosition",
-		"12": "initializePositionPda",
-		"13": "initializePositionByOperator",
-		"14": "updatePositionOperator",
-		"15": "swap",
-		"16": "swapExactOut",
-		"17": "swapWithPriceImpact",
-		"18": "withdrawProtocolFee",
-		"19": "initializeReward",
-		"20": "fundReward",
-		"21": "updateRewardFunder",
-		"22": "updateRewardDuration",
-		"23": "claimReward",
-		"24": "claimFee",
-		"25": "closePosition",
-		// More instruction types can be added here
+// parseSwap parses a swap instruction
+func (p *TransactionParser) parseSwap(ctx context.Context, instruction Instruction, data []byte, txModel *models.Transaction) error {
+	if len(instruction.Accounts) < 9 {
+		return fmt.Errorf("insufficient accounts for swap operation")
 	}
 
-	// Check if discriminator exists in the data
-	if disc, ok := instructionData["discriminator"]; ok {
-		if discStr, ok := disc.(string); ok {
-			if instType, ok := instructionTypes[discStr]; ok {
-				return instType, nil
-			}
-		}
+	if len(data) < 17 { // 1 byte discriminator + 8 bytes amountIn + 8 bytes minAmountOut
+		return fmt.Errorf("insufficient data for swap operation")
 	}
 
-	// If we can't determine the type specifically, try to infer from data fields
-	if amountIn, ok := instructionData["amountIn"]; ok {
-		if _, ok := instructionData["minAmountOut"]; ok {
-			if _, ok := amountIn.(float64); ok {
-				return "swap", nil
-			}
-		}
-	}
+	// Extract parameters from data
+	amountIn := binary.LittleEndian.Uint64(data[1:9])
+	minAmountOut := binary.LittleEndian.Uint64(data[9:17])
 
-	if _, ok := instructionData["liquidityParameter"]; ok {
-		return "addLiquidity", nil
-	}
+	// Extract accounts
+	lbPair := instruction.Accounts[0]
+	// reserveX and reserveY used for reference but not directly
+	// userTokenIn and userTokenOut used for determining swap direction
+	userTokenIn := instruction.Accounts[4]
+	// tokenXMint and tokenYMint are used
+	tokenXMint := instruction.Accounts[6]
+	tokenYMint := instruction.Accounts[7]
+	// oracle not directly used
+	user := instruction.Accounts[10] // Index 10 for user account
 
-	if _, ok := instructionData["binLiquidityRemoval"]; ok {
-		return "removeLiquidity", nil
-	}
-
-	return "unknown", fmt.Errorf("could not determine instruction type from data")
-}
-
-// parseInitializeLbPair parses the initializeLbPair instruction
-func (p *TransactionParser) parseInitializeLbPair(tx *models.Transaction, instruction models.TransactionInstruction, data map[string]interface{}) error {
-	fmt.Println("Parsing initializeLbPair instruction")
-
-	// Extract account addresses
-	accounts, err := extractAccounts(instruction)
+	// Get pair information
+	pairID, err := p.getPairID(ctx, lbPair)
 	if err != nil {
 		return err
 	}
 
-	if len(accounts) < 13 {
-		return fmt.Errorf("not enough accounts for initializeLbPair instruction")
-	}
-
-	// Map accounts based on the documentation
-	pairAccount := accounts[0]
-	tokenMintX := accounts[2]
-	tokenMintY := accounts[3]
-
-	// Extract instruction data
-	activeId := extractInt32(data, "activeId")
-	binStep := extractUint16(data, "binStep")
-
-	fmt.Printf("LB Pair Created: %s, TokenX: %s, TokenY: %s, ActiveID: %d, BinStep: %d\n",
-		pairAccount, tokenMintX, tokenMintY, activeId, binStep)
-
-	// Save to database
-	meteoraPair := &models.MeteoraPair{
-		Address:    pairAccount,
-		TokenMintX: tokenMintX,
-		TokenMintY: tokenMintY,
-		ActiveID:   activeId,
-		BinStep:    binStep,
-	}
-
-	result := p.db.Create(meteoraPair)
-	if result.Error != nil {
-		return fmt.Errorf("failed to save Meteora pair: %w", result.Error)
-	}
-
-	return nil
-}
-
-// parseSwap parses the swap instruction
-func (p *TransactionParser) parseSwap(tx *models.Transaction, instruction models.TransactionInstruction, data map[string]interface{}) error {
-	fmt.Println("Parsing swap instruction")
-
-	// Extract account addresses
-	accounts, err := extractAccounts(instruction)
+	// Determine wallet ID
+	walletID, err := p.getWalletID(ctx, user)
 	if err != nil {
 		return err
 	}
 
-	if len(accounts) < 11 {
-		return fmt.Errorf("not enough accounts for swap instruction")
-	}
+	// Check if token in is X or Y
+	swapForY := false
+	tokenInMint := ""
+	tokenOutMint := ""
 
-	// Map accounts based on the documentation
-	lbPair := accounts[0]
-	tokenInMint := accounts[6]
-	tokenOutMint := accounts[7]
-	user := accounts[10]
-
-	// Extract instruction data
-	amountIn := extractUint64(data, "amountIn")
-	minAmountOut := extractUint64(data, "minAmountOut")
-
-	fmt.Printf("Swap: %s, User: %s, AmountIn: %d, MinAmountOut: %d\n",
-		lbPair, user, amountIn, minAmountOut)
-
-	// Find pair and wallet
-	pair, err := p.findPair(lbPair)
+	// Check if userTokenIn is associated with tokenXMint
+	isXToY, err := p.isTokenXToY(ctx, userTokenIn, tokenXMint)
 	if err != nil {
 		return err
 	}
 
-	walletID, err := p.findOrCreateWallet(user)
-	if err != nil {
-		return err
+	swapForY = isXToY
+	if swapForY {
+		tokenInMint = tokenXMint
+		tokenOutMint = tokenYMint
+	} else {
+		tokenInMint = tokenYMint
+		tokenOutMint = tokenXMint
 	}
 
-	// Save to database
-	meteoraSwap := &models.MeteoraSwap{
-		TransactionID: tx.ID,
-		PairID:        pair.ID,
+	// Extract additional event data if available
+	amountOut := minAmountOut
+	fee := uint64(0)
+	feeBps := uint16(0)
+	protocolFee := uint64(0)
+	startBinID := int32(0)
+	endBinID := int32(0)
+
+	// Extract swap event from tx events if available - note: this is a placeholder
+	// In a complete implementation, we would use the transaction events
+	if txModel.Source == "meteora" {
+		// Try to parse the swap event for more details
+		// This would be specific to the format of the Solana program's events
+		// Placeholder for actual event parsing logic
+	}
+
+	// Create the swap model
+	swap := models.MeteoraSwap{
+		TransactionID: txModel.ID,
+		PairID:        pairID,
 		WalletID:      walletID,
 		User:          user,
 		TokenInMint:   tokenInMint,
 		TokenOutMint:  tokenOutMint,
 		AmountIn:      amountIn,
+		AmountOut:     amountOut,
 		MinAmountOut:  minAmountOut,
-		SwapTime:      tx.BlockTime,
+		Fee:           fee,
+		ProtocolFee:   protocolFee,
+		FeeBps:        feeBps,
+		SwapTime:      txModel.BlockTime,
+		StartBinID:    startBinID,
+		EndBinID:      endBinID,
+		SwapForY:      swapForY,
 	}
 
-	result := p.db.Create(meteoraSwap)
-	if result.Error != nil {
-		return fmt.Errorf("failed to save Meteora swap: %w", result.Error)
-	}
+	// Add swap to transaction
+	txModel.Swaps = append(txModel.Swaps, swap)
 
 	return nil
 }
 
-// parseAddLiquidity parses the addLiquidity instruction
-func (p *TransactionParser) parseAddLiquidity(tx *models.Transaction, instruction models.TransactionInstruction, data map[string]interface{}) error {
-	fmt.Println("Parsing addLiquidity instruction")
+// parseSwapExactOut parses a swapExactOut instruction
+func (p *TransactionParser) parseSwapExactOut(ctx context.Context, instruction Instruction, data []byte, txModel *models.Transaction) error {
+	if len(instruction.Accounts) < 9 {
+		return fmt.Errorf("insufficient accounts for swap exact out operation")
+	}
 
-	// Extract account addresses
-	accounts, err := extractAccounts(instruction)
+	if len(data) < 17 { // 1 byte discriminator + 8 bytes maxAmountIn + 8 bytes exactAmountOut
+		return fmt.Errorf("insufficient data for swap exact out operation")
+	}
+
+	// Extract parameters from data
+	maxAmountIn := binary.LittleEndian.Uint64(data[1:9])
+	exactAmountOut := binary.LittleEndian.Uint64(data[9:17])
+
+	// Extract accounts (same as swap)
+	lbPair := instruction.Accounts[0]
+	// reserveX and reserveY used for reference but not directly
+	// userTokenIn and userTokenOut used for determining swap direction
+	userTokenIn := instruction.Accounts[4]
+	// tokenXMint and tokenYMint are used
+	tokenXMint := instruction.Accounts[6]
+	tokenYMint := instruction.Accounts[7]
+	// oracle not directly used
+	user := instruction.Accounts[10] // Index 10 for user account
+
+	// Get pair information
+	pairID, err := p.getPairID(ctx, lbPair)
 	if err != nil {
 		return err
 	}
 
-	if len(accounts) < 13 {
-		return fmt.Errorf("not enough accounts for addLiquidity instruction")
-	}
-
-	// Map accounts based on the documentation
-	positionAddr := accounts[0]
-	lbPairAddr := accounts[1]
-	senderAddr := accounts[11]
-
-	// Extract liquidity parameters
-	var amountX, amountY uint64
-	var activeId int32
-
-	if liquidityParam, ok := data["liquidityParameter"].(map[string]interface{}); ok {
-		if amount, ok := liquidityParam["amount"].(map[string]interface{}); ok {
-			if xVal, ok := amount["x"].(string); ok {
-				fmt.Sscanf(xVal, "%d", &amountX)
-			}
-			if yVal, ok := amount["y"].(string); ok {
-				fmt.Sscanf(yVal, "%d", &amountY)
-			}
-		}
-
-		if val, ok := liquidityParam["activeId"].(float64); ok {
-			activeId = int32(val)
-		}
-	}
-
-	fmt.Printf("Add Liquidity: Position: %s, LbPair: %s, User: %s, AmountX: %d, AmountY: %d, ActiveID: %d\n",
-		positionAddr, lbPairAddr, senderAddr, amountX, amountY, activeId)
-
-	// Find pair, position and wallet
-	pair, err := p.findPair(lbPairAddr)
+	// Determine wallet ID
+	walletID, err := p.getWalletID(ctx, user)
 	if err != nil {
 		return err
 	}
 
-	position, err := p.findPosition(positionAddr)
+	// Check if token in is X or Y
+	swapForY := false
+	tokenInMint := ""
+	tokenOutMint := ""
+
+	// Check if userTokenIn is associated with tokenXMint
+	isXToY, err := p.isTokenXToY(ctx, userTokenIn, tokenXMint)
 	if err != nil {
 		return err
 	}
 
-	walletID, err := p.findOrCreateWallet(senderAddr)
-	if err != nil {
-		return err
+	swapForY = isXToY
+	if swapForY {
+		tokenInMint = tokenXMint
+		tokenOutMint = tokenYMint
+	} else {
+		tokenInMint = tokenYMint
+		tokenOutMint = tokenXMint
 	}
 
-	// Save to database
-	liquidityAddition := &models.MeteoraLiquidityAddition{
-		TransactionID: tx.ID,
-		PositionID:    position.ID,
-		PairID:        pair.ID,
+	// Create the swap model
+	swap := models.MeteoraSwap{
+		TransactionID: txModel.ID,
+		PairID:        pairID,
 		WalletID:      walletID,
-		User:          senderAddr,
+		User:          user,
+		TokenInMint:   tokenInMint,
+		TokenOutMint:  tokenOutMint,
+		AmountIn:      maxAmountIn, // This is max, actual amount may be different
+		AmountOut:     exactAmountOut,
+		MinAmountOut:  exactAmountOut, // In exact out, this is the exact amount
+		SwapTime:      txModel.BlockTime,
+		SwapForY:      swapForY,
+	}
+
+	// Add swap to transaction
+	txModel.Swaps = append(txModel.Swaps, swap)
+
+	return nil
+}
+
+// parseAddLiquidity parses an addLiquidity instruction
+func (p *TransactionParser) parseAddLiquidity(ctx context.Context, instruction Instruction, data []byte, txModel *models.Transaction) error {
+	if len(instruction.Accounts) < 12 {
+		return fmt.Errorf("insufficient accounts for add liquidity operation")
+	}
+
+	// Extract accounts
+	position := instruction.Accounts[0]
+	lbPair := instruction.Accounts[1]
+	// User token accounts used for reference when tracking transfers
+	// userTokenX := instruction.Accounts[3]
+	// userTokenY := instruction.Accounts[4]
+	reserveX := instruction.Accounts[5]
+	reserveY := instruction.Accounts[6]
+	tokenXMint := instruction.Accounts[7]
+	tokenYMint := instruction.Accounts[8]
+	user := instruction.Accounts[12] // Index 12 for sender account
+
+	// Get position, pair, and wallet information
+	positionID, err := p.getPositionID(ctx, position)
+	if err != nil {
+		return err
+	}
+
+	pairID, err := p.getPairID(ctx, lbPair)
+	if err != nil {
+		return err
+	}
+
+	walletID, err := p.getWalletID(ctx, user)
+	if err != nil {
+		return err
+	}
+
+	// Parse amount X and Y from token transfers
+	// This is simplified and would need to be replaced with actual token transfer tracking
+	amountX := uint64(0)
+	amountY := uint64(0)
+
+	for _, transfer := range txModel.TokenTransfers {
+		if transfer.ToTokenAccount == reserveX && transfer.Mint == tokenXMint {
+			amountX = uint64(transfer.TokenAmount)
+		} else if transfer.ToTokenAccount == reserveY && transfer.Mint == tokenYMint {
+			amountY = uint64(transfer.TokenAmount)
+		}
+	}
+
+	// Get active bin ID (default to 0 if not available)
+	activeID := int32(0)
+
+	// Create the liquidity addition model
+	addition := models.MeteoraLiquidityAddition{
+		TransactionID: txModel.ID,
+		PositionID:    positionID,
+		PairID:        pairID,
+		WalletID:      walletID,
+		User:          user,
 		AmountX:       amountX,
 		AmountY:       amountY,
-		ActiveID:      activeId,
-		AddTime:       tx.BlockTime,
+		ActiveID:      activeID,
+		AddTime:       txModel.BlockTime,
 	}
 
-	result := p.db.Create(liquidityAddition)
-	if result.Error != nil {
-		return fmt.Errorf("failed to save Meteora liquidity addition: %w", result.Error)
-	}
+	// Add liquidity addition to transaction
+	txModel.LiquidityAdditions = append(txModel.LiquidityAdditions, addition)
 
 	return nil
 }
 
-// parseRemoveLiquidity parses the removeLiquidity instruction
-func (p *TransactionParser) parseRemoveLiquidity(tx *models.Transaction, instruction models.TransactionInstruction, data map[string]interface{}) error {
-	fmt.Println("Parsing removeLiquidity instruction")
+// Other liquidity addition variants can be added with similar implementations
+func (p *TransactionParser) parseAddLiquidityByWeight(ctx context.Context, instruction Instruction, data []byte, txModel *models.Transaction) error {
+	// Similar to parseAddLiquidity but with weight distribution
+	return p.parseAddLiquidity(ctx, instruction, data, txModel)
+}
 
-	// Extract account addresses
-	accounts, err := extractAccounts(instruction)
+func (p *TransactionParser) parseAddLiquidityByStrategy(ctx context.Context, instruction Instruction, data []byte, txModel *models.Transaction) error {
+	// Similar to parseAddLiquidity but with strategy
+	return p.parseAddLiquidity(ctx, instruction, data, txModel)
+}
+
+// parseAddLiquidityByStrategyOneSide parses an addLiquidityByStrategyOneSide instruction
+func (p *TransactionParser) parseAddLiquidityByStrategyOneSide(ctx context.Context, instruction Instruction, data []byte, txModel *models.Transaction) error {
+	// Similar to parseAddLiquidity but one-sided
+	if len(instruction.Accounts) < 10 {
+		return fmt.Errorf("insufficient accounts for add liquidity one side operation")
+	}
+
+	// Extract accounts
+	position := instruction.Accounts[0]
+	lbPair := instruction.Accounts[1]
+	// User token account used for reference when tracking transfers
+	// userToken := instruction.Accounts[3]
+	reserve := instruction.Accounts[4]
+	tokenMint := instruction.Accounts[5]
+	user := instruction.Accounts[8] // Index 8 for sender account
+
+	// Get position, pair, and wallet information
+	positionID, err := p.getPositionID(ctx, position)
 	if err != nil {
 		return err
 	}
 
-	if len(accounts) < 13 {
-		return fmt.Errorf("not enough accounts for removeLiquidity instruction")
+	pairID, err := p.getPairID(ctx, lbPair)
+	if err != nil {
+		return err
 	}
 
-	// Map accounts based on the documentation
-	positionAddr := accounts[0]
-	lbPairAddr := accounts[1]
-	senderAddr := accounts[11]
-
-	// Extract bin liquidity reductions
-	type BinReduction struct {
-		BinID  int32
-		Amount uint64
+	walletID, err := p.getWalletID(ctx, user)
+	if err != nil {
+		return err
 	}
-	var binReductions []BinReduction
 
-	if reductions, ok := data["binLiquidityRemoval"].([]interface{}); ok {
-		for _, red := range reductions {
-			redMap, mapOk := red.(map[string]interface{})
-			if !mapOk {
-				continue
-			}
+	// Parse amount from token transfers
+	amount := uint64(0)
 
-			var binRed BinReduction
-
-			if binIdVal, ok := redMap["binId"]; ok {
-				if binIdFloat, ok := binIdVal.(float64); ok {
-					binRed.BinID = int32(binIdFloat)
-				}
-			}
-
-			if amountVal, ok := redMap["liquidityAmount"]; ok {
-				if amountStr, ok := amountVal.(string); ok {
-					fmt.Sscanf(amountStr, "%d", &binRed.Amount)
-				}
-			}
-
-			binReductions = append(binReductions, binRed)
+	for _, transfer := range txModel.TokenTransfers {
+		if transfer.ToTokenAccount == reserve && transfer.Mint == tokenMint {
+			amount = uint64(transfer.TokenAmount)
 		}
 	}
 
-	fmt.Printf("Remove Liquidity: Position: %s, LbPair: %s, User: %s, Bins: %d\n",
-		positionAddr, lbPairAddr, senderAddr, len(binReductions))
-
-	// Find pair, position and wallet
-	pair, err := p.findPair(lbPairAddr)
+	// Determine if this is X or Y token
+	isXToken, err := p.isXToken(ctx, tokenMint, lbPair)
 	if err != nil {
 		return err
 	}
 
-	position, err := p.findPosition(positionAddr)
-	if err != nil {
-		return err
-	}
-
-	walletID, err := p.findOrCreateWallet(senderAddr)
-	if err != nil {
-		return err
-	}
-
-	// Convert bin reductions to JSON
-	binReductionsJSON, err := json.Marshal(binReductions)
-	if err != nil {
-		return fmt.Errorf("failed to marshal bin reductions: %w", err)
-	}
-
-	// Save to database
-	liquidityRemoval := &models.MeteoraLiquidityRemoval{
-		TransactionID: tx.ID,
-		PositionID:    position.ID,
-		PairID:        pair.ID,
+	// Create the liquidity addition model
+	addition := models.MeteoraLiquidityAddition{
+		TransactionID: txModel.ID,
+		PositionID:    positionID,
+		PairID:        pairID,
 		WalletID:      walletID,
-		User:          senderAddr,
-		RemoveTime:    tx.BlockTime,
-		BinReductions: string(binReductionsJSON),
+		User:          user,
+		AddTime:       txModel.BlockTime,
 	}
 
-	result := p.db.Create(liquidityRemoval)
-	if result.Error != nil {
-		return fmt.Errorf("failed to save Meteora liquidity removal: %w", result.Error)
+	if isXToken {
+		addition.AmountX = amount
+	} else {
+		addition.AmountY = amount
 	}
+
+	// Add liquidity addition to transaction
+	txModel.LiquidityAdditions = append(txModel.LiquidityAdditions, addition)
 
 	return nil
 }
 
-// parseInitializePosition parses the initializePosition instruction
-func (p *TransactionParser) parseInitializePosition(tx *models.Transaction, instruction models.TransactionInstruction, data map[string]interface{}) error {
-	fmt.Println("Parsing initializePosition instruction")
+// parseRemoveLiquidity parses a removeLiquidity instruction
+func (p *TransactionParser) parseRemoveLiquidity(ctx context.Context, instruction Instruction, data []byte, txModel *models.Transaction) error {
+	if len(instruction.Accounts) < 12 {
+		return fmt.Errorf("insufficient accounts for remove liquidity operation")
+	}
 
-	// Extract account addresses
-	accounts, err := extractAccounts(instruction)
+	// Extract accounts
+	position := instruction.Accounts[0]
+	lbPair := instruction.Accounts[1]
+	// User token accounts used for reference when tracking transfers
+	// userTokenX := instruction.Accounts[3]
+	// userTokenY := instruction.Accounts[4]
+	reserveX := instruction.Accounts[5]
+	reserveY := instruction.Accounts[6]
+	tokenXMint := instruction.Accounts[7]
+	tokenYMint := instruction.Accounts[8]
+	user := instruction.Accounts[12] // Index 12 for sender account
+
+	// Get position, pair, and wallet information
+	positionID, err := p.getPositionID(ctx, position)
 	if err != nil {
 		return err
 	}
 
-	if len(accounts) < 8 {
-		return fmt.Errorf("not enough accounts for initializePosition instruction")
-	}
-
-	// Map accounts based on the documentation
-	positionAddr := accounts[1]
-	lbPairAddr := accounts[2]
-	ownerAddr := accounts[3]
-
-	// Extract instruction data
-	lowerBinId := extractInt32(data, "lowerBinId")
-	width := extractInt32(data, "width")
-
-	fmt.Printf("Initialize Position: %s, LbPair: %s, Owner: %s, LowerBinID: %d, Width: %d\n",
-		positionAddr, lbPairAddr, ownerAddr, lowerBinId, width)
-
-	// Find pair and wallet
-	pair, err := p.findPair(lbPairAddr)
+	pairID, err := p.getPairID(ctx, lbPair)
 	if err != nil {
 		return err
 	}
 
-	walletID, err := p.findOrCreateWallet(ownerAddr)
+	walletID, err := p.getWalletID(ctx, user)
 	if err != nil {
 		return err
 	}
 
-	// Save to database
-	meteoraPosition := &models.MeteoraPosition{
-		Address:    positionAddr,
-		PairID:     pair.ID,
-		WalletID:   walletID,
-		Owner:      ownerAddr,
-		LowerBinID: lowerBinId,
-		Width:      width,
-		CreatedAt:  tx.BlockTime,
+	// Parse amount X and Y from token transfers
+	// This is simplified and would need to be replaced with actual token transfer tracking
+	amountX := uint64(0)
+	amountY := uint64(0)
+
+	for _, transfer := range txModel.TokenTransfers {
+		if transfer.FromTokenAccount == reserveX && transfer.Mint == tokenXMint {
+			amountX = uint64(transfer.TokenAmount)
+		} else if transfer.FromTokenAccount == reserveY && transfer.Mint == tokenYMint {
+			amountY = uint64(transfer.TokenAmount)
+		}
 	}
 
-	result := p.db.Create(meteoraPosition)
-	if result.Error != nil {
-		return fmt.Errorf("failed to save Meteora position: %w", result.Error)
+	// Create the liquidity removal model
+	removal := models.MeteoraLiquidityRemoval{
+		TransactionID:  txModel.ID,
+		PositionID:     positionID,
+		PairID:         pairID,
+		WalletID:       walletID,
+		User:           user,
+		AmountXRemoved: amountX,
+		AmountYRemoved: amountY,
+		RemoveTime:     txModel.BlockTime,
 	}
+
+	// Add liquidity removal to transaction
+	txModel.LiquidityRemovals = append(txModel.LiquidityRemovals, removal)
 
 	return nil
 }
 
-// parseClaimFee parses the claimFee instruction
-func (p *TransactionParser) parseClaimFee(tx *models.Transaction, instruction models.TransactionInstruction, data map[string]interface{}) error {
-	fmt.Println("Parsing claimFee instruction")
+// parseClaimFee parses a claimFee instruction
+func (p *TransactionParser) parseClaimFee(ctx context.Context, instruction Instruction, data []byte, txModel *models.Transaction) error {
+	if len(instruction.Accounts) < 12 {
+		return fmt.Errorf("insufficient accounts for claim fee operation")
+	}
 
-	// Extract account addresses
-	accounts, err := extractAccounts(instruction)
+	// Extract accounts
+	lbPair := instruction.Accounts[0]
+	position := instruction.Accounts[1]
+	user := instruction.Accounts[4] // Index 4 for sender account
+	reserveX := instruction.Accounts[5]
+	reserveY := instruction.Accounts[6]
+	userTokenX := instruction.Accounts[7]
+	userTokenY := instruction.Accounts[8]
+	tokenXMint := instruction.Accounts[9]
+	tokenYMint := instruction.Accounts[10]
+
+	// Get position, pair, and wallet information
+	positionID, err := p.getPositionID(ctx, position)
 	if err != nil {
 		return err
 	}
 
-	if len(accounts) < 14 {
-		return fmt.Errorf("not enough accounts for claimFee instruction")
-	}
-
-	// Map accounts based on the documentation
-	lbPairAddr := accounts[0]
-	positionAddr := accounts[1]
-	senderAddr := accounts[4]
-
-	fmt.Printf("Claim Fee: Position: %s, LbPair: %s, User: %s\n",
-		positionAddr, lbPairAddr, senderAddr)
-
-	// Find pair, position and wallet
-	pair, err := p.findPair(lbPairAddr)
+	pairID, err := p.getPairID(ctx, lbPair)
 	if err != nil {
 		return err
 	}
 
-	position, err := p.findPosition(positionAddr)
+	walletID, err := p.getWalletID(ctx, user)
 	if err != nil {
 		return err
 	}
 
-	walletID, err := p.findOrCreateWallet(senderAddr)
-	if err != nil {
-		return err
+	// Parse amount X and Y from token transfers
+	amountX := uint64(0)
+	amountY := uint64(0)
+
+	for _, transfer := range txModel.TokenTransfers {
+		if transfer.FromTokenAccount == reserveX && transfer.ToTokenAccount == userTokenX && transfer.Mint == tokenXMint {
+			amountX = uint64(transfer.TokenAmount)
+		} else if transfer.FromTokenAccount == reserveY && transfer.ToTokenAccount == userTokenY && transfer.Mint == tokenYMint {
+			amountY = uint64(transfer.TokenAmount)
+		}
 	}
 
-	// Save to database
-	feeClaim := &models.MeteoraFeeClaim{
-		TransactionID: tx.ID,
-		PositionID:    position.ID,
-		PairID:        pair.ID,
+	// Create the fee claim model
+	claim := models.MeteoraFeeClaim{
+		TransactionID: txModel.ID,
+		PositionID:    positionID,
+		PairID:        pairID,
 		WalletID:      walletID,
-		User:          senderAddr,
-		ClaimTime:     tx.BlockTime,
+		User:          user,
+		AmountX:       amountX,
+		AmountY:       amountY,
+		ClaimTime:     txModel.BlockTime,
 	}
 
-	result := p.db.Create(feeClaim)
-	if result.Error != nil {
-		return fmt.Errorf("failed to save Meteora fee claim: %w", result.Error)
-	}
+	// Add fee claim to transaction
+	txModel.FeeClaims = append(txModel.FeeClaims, claim)
 
 	return nil
 }
 
-// parseClosePosition parses the closePosition instruction
-func (p *TransactionParser) parseClosePosition(tx *models.Transaction, instruction models.TransactionInstruction, data map[string]interface{}) error {
-	fmt.Println("Parsing closePosition instruction")
+// parseClaimReward parses a claimReward instruction
+func (p *TransactionParser) parseClaimReward(ctx context.Context, instruction Instruction, data []byte, txModel *models.Transaction) error {
+	if len(instruction.Accounts) < 10 {
+		return fmt.Errorf("insufficient accounts for claim reward operation")
+	}
 
-	// Extract account addresses
-	accounts, err := extractAccounts(instruction)
+	if len(data) < 9 { // 1 byte discriminator + 8 bytes reward index
+		return fmt.Errorf("insufficient data for claim reward operation")
+	}
+
+	// Extract parameters from data
+	rewardIndex := binary.LittleEndian.Uint64(data[1:9])
+
+	// Extract accounts
+	lbPair := instruction.Accounts[0]
+	position := instruction.Accounts[1]
+	user := instruction.Accounts[4] // Index 4 for sender account
+	rewardVault := instruction.Accounts[5]
+	rewardMint := instruction.Accounts[6]
+	userTokenAccount := instruction.Accounts[7]
+
+	// Get position, pair, reward, and wallet information
+	positionID, err := p.getPositionID(ctx, position)
 	if err != nil {
 		return err
 	}
 
-	if len(accounts) < 8 {
-		return fmt.Errorf("not enough accounts for closePosition instruction")
-	}
-
-	// Map accounts based on the documentation
-	positionAddr := accounts[0]
-	lbPairAddr := accounts[1]
-	senderAddr := accounts[4]
-	rentReceiver := accounts[5]
-
-	fmt.Printf("Close Position: %s, LbPair: %s, User: %s, RentReceiver: %s\n",
-		positionAddr, lbPairAddr, senderAddr, rentReceiver)
-
-	// Look up the position in the database
-	position, err := p.findPosition(positionAddr)
+	pairID, err := p.getPairID(ctx, lbPair)
 	if err != nil {
 		return err
 	}
 
-	// Update the position's status to closed
-	now := time.Now()
-	position.Status = "closed"
-	position.ClosedAt = &now
-	if err := p.db.Save(&position).Error; err != nil {
-		return fmt.Errorf("failed to update position status: %w", err)
-	}
-
-	return nil
-}
-
-// parseInitializeReward parses the initializeReward instruction
-func (p *TransactionParser) parseInitializeReward(tx *models.Transaction, instruction models.TransactionInstruction, data map[string]interface{}) error {
-	fmt.Println("Parsing initializeReward instruction")
-
-	// Extract account addresses
-	accounts, err := extractAccounts(instruction)
+	rewardID, err := p.getRewardID(ctx, lbPair, rewardIndex)
 	if err != nil {
 		return err
 	}
 
-	if len(accounts) < 10 {
-		return fmt.Errorf("not enough accounts for initializeReward instruction")
-	}
-
-	// Map accounts based on the documentation
-	lbPairAddr := accounts[0]
-	rewardVault := accounts[1]
-	rewardMint := accounts[2]
-
-	// Extract instruction data
-	rewardIndex := extractUint64(data, "rewardIndex")
-	rewardDuration := extractUint64(data, "rewardDuration")
-
-	var funder string
-	if val, ok := data["funder"].(string); ok {
-		funder = val
-	}
-
-	fmt.Printf("Initialize Reward: LbPair: %s, RewardIndex: %d, Duration: %d, Funder: %s\n",
-		lbPairAddr, rewardIndex, rewardDuration, funder)
-
-	// Find pair
-	pair, err := p.findPair(lbPairAddr)
+	walletID, err := p.getWalletID(ctx, user)
 	if err != nil {
 		return err
 	}
 
-	// Calculate start and end times
-	startTime := tx.BlockTime
-	endTime := startTime.Add(time.Duration(rewardDuration) * time.Second)
+	// Parse amount from token transfers
+	amount := uint64(0)
 
-	// Save to database
-	reward := &models.MeteoraReward{
-		PairID:         pair.ID,
-		RewardIndex:    rewardIndex,
-		RewardVault:    rewardVault,
-		RewardMint:     rewardMint,
-		Funder:         funder,
-		RewardDuration: rewardDuration,
-		StartTime:      startTime,
-		EndTime:        endTime,
+	for _, transfer := range txModel.TokenTransfers {
+		if transfer.FromTokenAccount == rewardVault && transfer.ToTokenAccount == userTokenAccount && transfer.Mint == rewardMint {
+			amount = uint64(transfer.TokenAmount)
+		}
 	}
 
-	result := p.db.Create(reward)
-	if result.Error != nil {
-		return fmt.Errorf("failed to save Meteora reward: %w", result.Error)
-	}
-
-	return nil
-}
-
-// parseFundReward parses the fundReward instruction
-func (p *TransactionParser) parseFundReward(tx *models.Transaction, instruction models.TransactionInstruction, data map[string]interface{}) error {
-	fmt.Println("Parsing fundReward instruction")
-
-	// Extract account addresses
-	accounts, err := extractAccounts(instruction)
-	if err != nil {
-		return err
-	}
-
-	if len(accounts) < 9 {
-		return fmt.Errorf("not enough accounts for fundReward instruction")
-	}
-
-	// Map accounts based on the documentation
-	lbPairAddr := accounts[0]
-	funderAddr := accounts[4]
-
-	// Extract instruction data
-	rewardIndex := extractUint64(data, "rewardIndex")
-	amount := extractUint64(data, "amount")
-	carryForward := extractBool(data, "carryForward")
-
-	fmt.Printf("Fund Reward: LbPair: %s, RewardIndex: %d, Amount: %d, CarryForward: %v\n",
-		lbPairAddr, rewardIndex, amount, carryForward)
-
-	// Find pair, reward and wallet
-	pair, err := p.findPair(lbPairAddr)
-	if err != nil {
-		return err
-	}
-
-	reward, err := p.findReward(pair.ID, rewardIndex)
-	if err != nil {
-		return err
-	}
-
-	walletID, err := p.findOrCreateWallet(funderAddr)
-	if err != nil {
-		return err
-	}
-
-	// Save to database
-	rewardFunding := &models.MeteoraRewardFunding{
-		TransactionID: tx.ID,
-		RewardID:      reward.ID,
-		PairID:        pair.ID,
+	// Create the reward claim model
+	claim := models.MeteoraRewardClaim{
+		TransactionID: txModel.ID,
+		PositionID:    positionID,
+		RewardID:      rewardID,
+		PairID:        pairID,
 		WalletID:      walletID,
-		Funder:        funderAddr,
+		User:          user,
+		Amount:        amount,
+		ClaimTime:     txModel.BlockTime,
+	}
+
+	// Add reward claim to transaction
+	txModel.RewardClaims = append(txModel.RewardClaims, claim)
+
+	return nil
+}
+
+// parseFundReward parses a fundReward instruction
+func (p *TransactionParser) parseFundReward(ctx context.Context, instruction Instruction, data []byte, txModel *models.Transaction) error {
+	if len(instruction.Accounts) < 8 {
+		return fmt.Errorf("insufficient accounts for fund reward operation")
+	}
+
+	if len(data) < 18 { // 1 byte discriminator + 8 bytes reward index + 8 bytes amount + 1 byte carryForward
+		return fmt.Errorf("insufficient data for fund reward operation")
+	}
+
+	// Extract parameters from data
+	rewardIndex := binary.LittleEndian.Uint64(data[1:9])
+	amount := binary.LittleEndian.Uint64(data[9:17])
+	carryForward := data[17] != 0
+
+	// Extract accounts
+	lbPair := instruction.Accounts[0]
+	// These accounts used for reference when tracking transfers
+	// rewardVault := instruction.Accounts[1]
+	// rewardMint := instruction.Accounts[2]
+	// funderTokenAccount := instruction.Accounts[3]
+	funder := instruction.Accounts[4]
+
+	// Get pair, reward, and wallet information
+	pairID, err := p.getPairID(ctx, lbPair)
+	if err != nil {
+		return err
+	}
+
+	rewardID, err := p.getRewardID(ctx, lbPair, rewardIndex)
+	if err != nil {
+		return err
+	}
+
+	walletID, err := p.getWalletID(ctx, funder)
+	if err != nil {
+		return err
+	}
+
+	// Create the reward funding model
+	funding := models.MeteoraRewardFunding{
+		TransactionID: txModel.ID,
+		RewardID:      rewardID,
+		PairID:        pairID,
+		WalletID:      walletID,
+		Funder:        funder,
 		Amount:        amount,
 		CarryForward:  carryForward,
-		FundTime:      tx.BlockTime,
+		FundTime:      txModel.BlockTime,
 	}
 
-	result := p.db.Create(rewardFunding)
-	if result.Error != nil {
-		return fmt.Errorf("failed to save Meteora reward funding: %w", result.Error)
-	}
+	// Add reward funding to transaction
+	txModel.RewardFundings = append(txModel.RewardFundings, funding)
 
 	return nil
 }
 
-// parseClaimReward parses the claimReward instruction
-func (p *TransactionParser) parseClaimReward(tx *models.Transaction, instruction models.TransactionInstruction, data map[string]interface{}) error {
-	fmt.Println("Parsing claimReward instruction")
-
-	// Extract account addresses
-	accounts, err := extractAccounts(instruction)
-	if err != nil {
-		return err
-	}
-
-	if len(accounts) < 11 {
-		return fmt.Errorf("not enough accounts for claimReward instruction")
-	}
-
-	// Map accounts based on the documentation
-	lbPairAddr := accounts[0]
-	positionAddr := accounts[1]
-	senderAddr := accounts[4]
-
-	// Extract instruction data
-	rewardIndex := extractUint64(data, "rewardIndex")
-
-	fmt.Printf("Claim Reward: Position: %s, LbPair: %s, User: %s, RewardIndex: %d\n",
-		positionAddr, lbPairAddr, senderAddr, rewardIndex)
-
-	// Find pair, position, reward and wallet
-	pair, err := p.findPair(lbPairAddr)
-	if err != nil {
-		return err
-	}
-
-	position, err := p.findPosition(positionAddr)
-	if err != nil {
-		return err
-	}
-
-	reward, err := p.findReward(pair.ID, rewardIndex)
-	if err != nil {
-		return err
-	}
-
-	walletID, err := p.findOrCreateWallet(senderAddr)
-	if err != nil {
-		return err
-	}
-
-	// Save to database
-	rewardClaim := &models.MeteoraRewardClaim{
-		TransactionID: tx.ID,
-		PositionID:    position.ID,
-		RewardID:      reward.ID,
-		PairID:        pair.ID,
-		WalletID:      walletID,
-		User:          senderAddr,
-		ClaimTime:     tx.BlockTime,
-	}
-
-	result := p.db.Create(rewardClaim)
-	if result.Error != nil {
-		return fmt.Errorf("failed to save Meteora reward claim: %w", result.Error)
-	}
-
+// parseInitializePosition parses an initializePosition instruction
+func (p *TransactionParser) parseInitializePosition(ctx context.Context, instruction Instruction, data []byte, txModel *models.Transaction) error {
+	// This is a placeholder for actually creating position records
+	// In a complete implementation, this would create the position in the database
+	// and return without adding anything to the transaction model
 	return nil
+}
+
+// parseClosePosition parses a closePosition instruction
+func (p *TransactionParser) parseClosePosition(ctx context.Context, instruction Instruction, data []byte, txModel *models.Transaction) error {
+	// This is a placeholder for actually closing position records
+	// In a complete implementation, this would update the position status in the database
+	// and return without adding anything to the transaction model
+	return nil
+}
+
+// parseInitializePair parses an initializePair instruction
+func (p *TransactionParser) parseInitializePair(ctx context.Context, instruction Instruction, data []byte, txModel *models.Transaction) error {
+	// This is a placeholder for actually creating pair records
+	// In a complete implementation, this would create the pair in the database
+	// and return without adding anything to the transaction model
+	return nil
+}
+
+// Helper functions for database lookups
+
+// getPairID looks up or creates a pair record
+func (p *TransactionParser) getPairID(ctx context.Context, pairAddress string) (uint, error) {
+	// Placeholder for database lookup
+	// In a complete implementation, this would look up the pair by address
+	// or create it if it doesn't exist
+	return 1, nil
+}
+
+// getPositionID looks up or creates a position record
+func (p *TransactionParser) getPositionID(ctx context.Context, positionAddress string) (uint, error) {
+	// Placeholder for database lookup
+	// In a complete implementation, this would look up the position by address
+	// or create it if it doesn't exist
+	return 1, nil
+}
+
+// getWalletID looks up or creates a wallet record
+func (p *TransactionParser) getWalletID(ctx context.Context, walletAddress string) (uint, error) {
+	// Placeholder for database lookup
+	// In a complete implementation, this would look up the wallet by address
+	// or create it if it doesn't exist
+	return 1, nil
+}
+
+// getRewardID looks up or creates a reward record
+func (p *TransactionParser) getRewardID(ctx context.Context, pairAddress string, rewardIndex uint64) (uint, error) {
+	// Placeholder for database lookup
+	// In a complete implementation, this would look up the reward by pair and index
+	// or create it if it doesn't exist
+	return 1, nil
+}
+
+// isTokenXToY determines if the swap is from token X to token Y
+func (p *TransactionParser) isTokenXToY(ctx context.Context, tokenAccount string, tokenXMint string) (bool, error) {
+	// Placeholder for token account lookup
+	// In a complete implementation, this would determine if the token account is for token X
+	return true, nil
+}
+
+// isXToken determines if a token mint is token X for a pair
+func (p *TransactionParser) isXToken(ctx context.Context, tokenMint string, pairAddress string) (bool, error) {
+	// Placeholder for pair token lookup
+	// In a complete implementation, this would determine if the token is X or Y for the pair
+	return true, nil
+}
+
+// UnixTimeToTime converts a Unix timestamp to a Time
+func UnixTimeToTime(timestamp int64) time.Time {
+	return time.Unix(timestamp, 0)
 }
