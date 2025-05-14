@@ -3,6 +3,7 @@ package solana
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -15,6 +16,18 @@ import (
 	"gorm.io/gorm"
 )
 
+// Default configuration values
+const (
+	DefaultTimeout = 30 * time.Second
+)
+
+// Error types for better error handling
+var (
+	ErrMissingRPCURL    = errors.New("RPC_URL environment variable is not set")
+	ErrMissingAPIKey    = errors.New("HELIUS_API_KEY environment variable is not set")
+	ErrEmptyTransaction = errors.New("no transactions to save")
+)
+
 // Client represents a connection to the Solana blockchain
 type Client struct {
 	rpcClient  *rpc.Client
@@ -22,6 +35,15 @@ type Client struct {
 	httpClient *utils.HTTPClient
 }
 
+// ClientConfig holds the configuration for the Solana client
+type ClientConfig struct {
+	RPCURL  string
+	APIKey  string
+	Timeout time.Duration
+	BaseURL string
+}
+
+// Filters represents optional filters for transaction queries
 type Filters struct {
 	After  time.Time
 	LastTx string
@@ -29,36 +51,63 @@ type Filters struct {
 
 // NewClient creates a new Solana client
 func NewClient() (*Client, error) {
-	endpoint := os.Getenv("RPC_URL")
-	if endpoint == "" {
-		return nil, fmt.Errorf("RPC_URL environment variable is not set")
+	config, err := loadConfigFromEnv()
+	if err != nil {
+		return nil, err
 	}
 
-	rpcClient := rpc.New(endpoint)
+	rpcClient := rpc.New(config.RPCURL)
 
 	// Check connection by getting the latest block height
-	_, err := rpcClient.GetBlockHeight(context.Background(), rpc.CommitmentFinalized)
+	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+	defer cancel()
+
+	_, err = rpcClient.GetBlockHeight(ctx, rpc.CommitmentFinalized)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Solana RPC: %w", err)
 	}
 
 	// Create HTTP client for API requests
 	httpClient := utils.NewHTTPClient(
-		utils.WithTimeout(30*time.Second),
-		utils.WithBaseURL(constants.HeliusBaseURL),
+		utils.WithTimeout(config.Timeout),
+		utils.WithBaseURL(config.BaseURL),
 	)
 
 	return &Client{
 		rpcClient:  rpcClient,
-		endpoint:   endpoint,
+		endpoint:   config.RPCURL,
 		httpClient: httpClient,
 	}, nil
 }
 
+// loadConfigFromEnv loads configuration from environment variables
+func loadConfigFromEnv() (ClientConfig, error) {
+	rpcURL := os.Getenv("RPC_URL")
+	if rpcURL == "" {
+		return ClientConfig{}, ErrMissingRPCURL
+	}
+
+	config := ClientConfig{
+		RPCURL:  rpcURL,
+		Timeout: DefaultTimeout,
+		BaseURL: constants.HeliusBaseURL,
+	}
+
+	// Parse timeout if set
+	if timeoutStr := os.Getenv("RPC_TIMEOUT"); timeoutStr != "" {
+		if val, err := time.ParseDuration(timeoutStr); err == nil && val > 0 {
+			config.Timeout = val
+		}
+	}
+
+	return config, nil
+}
+
+// GetTransactions retrieves transactions for the specified wallet address
 func (c *Client) GetTransactions(ctx context.Context, address string, filters Filters) ([]Transaction, error) {
 	apiKey := os.Getenv("HELIUS_API_KEY")
 	if apiKey == "" {
-		return nil, fmt.Errorf("HELIUS_API_KEY environment variable is not set")
+		return nil, ErrMissingAPIKey
 	}
 
 	// Build query parameters
@@ -66,6 +115,7 @@ func (c *Client) GetTransactions(ctx context.Context, address string, filters Fi
 		"api-key": apiKey,
 	}
 
+	// Add optional filter parameters
 	if !filters.After.IsZero() {
 		queryParams["until"] = strconv.FormatInt(filters.After.Unix(), 10)
 	}
@@ -89,19 +139,30 @@ func (c *Client) GetTransactions(ctx context.Context, address string, filters Fi
 	return transactions, nil
 }
 
+// GetAndParseTransactions retrieves and parses transactions for the specified wallet address
 func (c *Client) GetAndParseTransactions(ctx context.Context, address string, filters Filters) ([]*models.Transaction, error) {
 	transactions, err := c.GetTransactions(ctx, address, filters)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get transactions: %w", err)
 	}
 
+	if len(transactions) == 0 {
+		return []*models.Transaction{}, nil
+	}
+
 	txParser := NewTransactionParser(c)
 
-	parsedTransactions := make([]*models.Transaction, len(transactions))
-	for i, tx := range transactions {
-		parsedTransactions[i], err = txParser.ProcessTransaction(ctx, tx)
+	// Process transactions with proper error handling
+	var parsedTransactions []*models.Transaction
+	for _, tx := range transactions {
+		parsedTx, err := txParser.ProcessTransaction(ctx, tx)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse transaction %s: %w", tx.Signature, err)
+			// Log error but continue processing other transactions
+			fmt.Printf("Warning: Failed to parse transaction %s: %v\n", tx.Signature, err)
+			continue
+		}
+		if parsedTx != nil {
+			parsedTransactions = append(parsedTransactions, parsedTx)
 		}
 	}
 
@@ -118,6 +179,19 @@ func SaveTransactions(db *gorm.DB, walletID uint, transactions []*models.Transac
 	return db.Transaction(func(tx *gorm.DB) error {
 		for _, transaction := range transactions {
 			transaction.WalletID = walletID
+
+			// Check for existing transaction to avoid duplicates
+			var existing models.Transaction
+			result := tx.Where("signature = ?", transaction.Signature).First(&existing)
+			if result.Error == nil {
+				// Transaction already exists, skip
+				continue
+			} else if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+				// Unexpected error
+				return fmt.Errorf("failed to check transaction %s: %w", transaction.Signature, result.Error)
+			}
+
+			// Save the transaction
 			if err := tx.Create(transaction).Error; err != nil {
 				return fmt.Errorf("failed to save transaction %s: %w", transaction.Signature, err)
 			}
