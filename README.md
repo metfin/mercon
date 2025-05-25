@@ -49,29 +49,6 @@ mercon/
    go run cmd/mercon/main.go
    ```
 
-## Development
-
-To add a new data source to scrape, extend the scraper package and add the appropriate models in the models package.
-
-## License
-
-See the LICENSE file for details.
-
-```bash
-# Clone the repository
-git clone https://github.com/heywinit/mercon.git
-cd mercon
-
-# Install dependencies
-bun install
-
-# Run tests
-bun test
-
-# Run example
-bun run examples/basic.ts
-```
-
 ## License
 
 Apache 2.0

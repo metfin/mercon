@@ -3,20 +3,47 @@ package solana
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/gagliardetto/solana-go/rpc"
+	"github.com/wnt/mercon/internal/constants"
+	"github.com/wnt/mercon/internal/models"
 	"github.com/wnt/mercon/internal/utils"
+	"gorm.io/gorm"
+)
+
+// Default configuration values
+const (
+	DefaultTimeout = 30 * time.Second
+)
+
+// Error types for better error handling
+var (
+	ErrMissingRPCURL    = errors.New("RPC_URL environment variable is not set")
+	ErrMissingAPIKey    = errors.New("HELIUS_API_KEY environment variable is not set")
+	ErrEmptyTransaction = errors.New("no transactions to save")
 )
 
 // Client represents a connection to the Solana blockchain
 type Client struct {
-	rpcClient *rpc.Client
-	endpoint  string
+	rpcClient  *rpc.Client
+	endpoint   string
+	httpClient *utils.HTTPClient
 }
 
+// ClientConfig holds the configuration for the Solana client
+type ClientConfig struct {
+	RPCURL  string
+	APIKey  string
+	Timeout time.Duration
+	BaseURL string
+}
+
+// Filters represents optional filters for transaction queries
 type Filters struct {
 	After  time.Time
 	LastTx string
@@ -24,121 +51,152 @@ type Filters struct {
 
 // NewClient creates a new Solana client
 func NewClient() (*Client, error) {
-	endpoint := os.Getenv("RPC_URL")
-	if endpoint == "" {
-		return nil, fmt.Errorf("RPC_URL environment variable is not set")
+	config, err := loadConfigFromEnv()
+	if err != nil {
+		return nil, err
 	}
 
-	rpcClient := rpc.New(endpoint)
+	rpcClient := rpc.New(config.RPCURL)
 
 	// Check connection by getting the latest block height
-	_, err := rpcClient.GetBlockHeight(context.Background(), rpc.CommitmentFinalized)
+	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+	defer cancel()
+
+	_, err = rpcClient.GetBlockHeight(ctx, rpc.CommitmentFinalized)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Solana RPC: %w", err)
 	}
 
+	// Create HTTP client for API requests
+	httpClient := utils.NewHTTPClient(
+		utils.WithTimeout(config.Timeout),
+		utils.WithBaseURL(config.BaseURL),
+	)
+
 	return &Client{
-		rpcClient: rpcClient,
-		endpoint:  endpoint,
+		rpcClient:  rpcClient,
+		endpoint:   config.RPCURL,
+		httpClient: httpClient,
 	}, nil
 }
 
-// GetTransactions returns the recent transactions for a wallet address
-func (c *Client) GetTransactionSigns(ctx context.Context, address string, filters Filters) ([]string, error) {
-	var allSignatures []string
-	lastTx := filters.LastTx
-	afterTime := filters.After
-	maxLoops := 10
-	loopCount := 0
-
-	// Create HTTP client
-	client := utils.NewHTTPClient()
-
-	// Use a bounded loop to fetch transactions in batches of up to 1000
-	for loopCount < maxLoops {
-		loopCount++
-
-		// Prepare the request body directly
-		requestBody := map[string]interface{}{
-			"jsonrpc": "2.0",
-			"id":      "mercon-client",
-			"method":  "getSignaturesForAddress",
-			"params":  []interface{}{address, map[string]interface{}{}},
-		}
-
-		// If we have a last transaction signature, add it to the params
-		if lastTx != "" {
-			requestBody["params"] = []interface{}{address, map[string]interface{}{
-				"before": lastTx,
-			}}
-		}
-
-		// Make the HTTP request
-		resp, err := client.Post(c.endpoint, requestBody, nil)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get transactions: %w", err)
-		}
-
-		if resp.StatusCode != 200 {
-			return nil, fmt.Errorf("RPC request failed with status code: %d", resp.StatusCode)
-		}
-
-		// Define a proper structure to unmarshal the response
-		var response struct {
-			ID      string `json:"id"`
-			JSONRPC string `json:"jsonrpc"`
-			Result  []struct {
-				Signature string `json:"signature"`
-				BlockTime int64  `json:"blockTime"` // Using int64 for Unix timestamp
-			} `json:"result"`
-		}
-
-		if err := json.Unmarshal(resp.Body, &response); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal transactions: %w", err)
-		}
-
-		// If no results, we're done
-		if len(response.Result) == 0 {
-			break
-		}
-
-		// Extract signatures from the current batch, filtering by After time if specified
-		var batchSignatures []string
-		shouldContinue := true
-
-		for _, tx := range response.Result {
-			// Convert Unix timestamp to time.Time
-			txTime := time.Unix(tx.BlockTime, 0)
-
-			if !afterTime.IsZero() && txTime.Before(afterTime) {
-				// We've reached transactions older than our filter time, no need to fetch more
-				shouldContinue = false
-				break
-			}
-			batchSignatures = append(batchSignatures, tx.Signature)
-		}
-
-		// If no valid signatures after filtering, we're done
-		if len(batchSignatures) == 0 {
-			break
-		}
-
-		// Append current batch to our results
-		allSignatures = append(allSignatures, batchSignatures...)
-
-		// If the batch size is less than 1000, we've reached the end
-		if len(response.Result) < 1000 {
-			break
-		}
-
-		// If we shouldn't continue or there are no more results, exit the loop
-		if !shouldContinue {
-			break
-		}
-
-		// Set up for the next batch
-		lastTx = response.Result[len(response.Result)-1].Signature
+// loadConfigFromEnv loads configuration from environment variables
+func loadConfigFromEnv() (ClientConfig, error) {
+	rpcURL := os.Getenv("RPC_URL")
+	if rpcURL == "" {
+		return ClientConfig{}, ErrMissingRPCURL
 	}
 
-	return allSignatures, nil
+	config := ClientConfig{
+		RPCURL:  rpcURL,
+		Timeout: DefaultTimeout,
+		BaseURL: constants.HeliusBaseURL,
+	}
+
+	// Parse timeout if set
+	if timeoutStr := os.Getenv("RPC_TIMEOUT"); timeoutStr != "" {
+		if val, err := time.ParseDuration(timeoutStr); err == nil && val > 0 {
+			config.Timeout = val
+		}
+	}
+
+	return config, nil
+}
+
+// GetTransactions retrieves transactions for the specified wallet address
+func (c *Client) GetTransactions(ctx context.Context, address string, filters Filters) ([]Transaction, error) {
+	apiKey := os.Getenv("HELIUS_API_KEY")
+	if apiKey == "" {
+		return nil, ErrMissingAPIKey
+	}
+
+	// Build query parameters
+	queryParams := map[string]string{
+		"api-key": apiKey,
+	}
+
+	// Add optional filter parameters
+	if !filters.After.IsZero() {
+		queryParams["until"] = strconv.FormatInt(filters.After.Unix(), 10)
+	}
+	if filters.LastTx != "" {
+		queryParams["before"] = filters.LastTx
+	}
+
+	// Make the request using the HTTP helper
+	path := fmt.Sprintf("/addresses/%s/transactions", address)
+	resp, err := c.httpClient.Get(path, queryParams, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transactions: %w", err)
+	}
+
+	// Decode the response
+	var transactions []Transaction
+	if err := json.Unmarshal(resp.Body, &transactions); err != nil {
+		return nil, fmt.Errorf("failed to decode transactions: %w", err)
+	}
+
+	return transactions, nil
+}
+
+// GetAndParseTransactions retrieves and parses transactions for the specified wallet address
+func (c *Client) GetAndParseTransactions(ctx context.Context, address string, filters Filters) ([]*models.Transaction, error) {
+	transactions, err := c.GetTransactions(ctx, address, filters)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transactions: %w", err)
+	}
+
+	if len(transactions) == 0 {
+		return []*models.Transaction{}, nil
+	}
+
+	txParser := NewTransactionParser(c)
+
+	// Process transactions with proper error handling
+	var parsedTransactions []*models.Transaction
+	for _, tx := range transactions {
+		parsedTx, err := txParser.ProcessTransaction(ctx, tx)
+		if err != nil {
+			// Log error but continue processing other transactions
+			fmt.Printf("Warning: Failed to parse transaction %s: %v\n", tx.Signature, err)
+			continue
+		}
+		if parsedTx != nil {
+			parsedTransactions = append(parsedTransactions, parsedTx)
+		}
+	}
+
+	return parsedTransactions, nil
+}
+
+// SaveTransactions saves transactions to the database
+func SaveTransactions(db *gorm.DB, walletID uint, transactions []*models.Transaction) error {
+	if len(transactions) == 0 {
+		return nil
+	}
+
+	// Use a transaction to ensure data consistency
+	return db.Transaction(func(tx *gorm.DB) error {
+		for _, transaction := range transactions {
+			transaction.WalletID = walletID
+
+			// Check for existing transaction to avoid duplicates
+			var existing models.Transaction
+			result := tx.Where("signature = ?", transaction.Signature).First(&existing)
+			if result.Error == nil {
+				// Transaction already exists, skip
+				continue
+			} else if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
+				// Unexpected error
+				return fmt.Errorf("failed to check transaction %s: %w", transaction.Signature, result.Error)
+			}
+
+			// Save the transaction
+			if err := tx.Create(transaction).Error; err != nil {
+				return fmt.Errorf("failed to save transaction %s: %w", transaction.Signature, err)
+			}
+		}
+
+		return nil
+	})
 }

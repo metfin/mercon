@@ -58,23 +58,47 @@ func migrateSchema(db *gorm.DB) error {
 	// Migrate models
 	if err := db.AutoMigrate(
 		&models.Wallet{},
-		&models.Position{},
 		&models.Transaction{},
 		&models.TransactionInstruction{},
 		&models.TransactionAccount{},
-		&models.PositionRecord{},
-		&models.PositionClaimFee{},
-		&models.PositionClaimReward{},
-		&models.PositionDeposit{},
-		&models.PositionWithdraw{},
+		&models.NativeTransfer{},
+		&models.TokenTransfer{},
+		&models.SwapEvent{},
+		&models.CompressionEvent{},
+		&models.MeteoraPair{},
+		&models.MeteoraPosition{},
+		&models.MeteoraSwap{},
+		&models.MeteoraLiquidityAddition{},
+		&models.MeteoraLiquidityRemoval{},
+		&models.MeteoraFeeClaim{},
+		&models.MeteoraReward{},
+		&models.MeteoraRewardFunding{},
+		&models.MeteoraRewardClaim{},
 	); err != nil {
 		return fmt.Errorf("failed to migrate database: %w", err)
 	}
 
 	// Add composite indexes for common query patterns
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_transactions_wallet_blocktime ON transactions(wallet_id, block_time)")
-	db.Exec("CREATE INDEX IF NOT EXISTS idx_position_wallet_pool ON positions(wallet_id, pool_address)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_transactions_signature ON transactions(signature)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_transactions_type_source ON transactions(type, source)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_native_transfers_accounts ON native_transfers(from_user_account, to_user_account)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_token_transfers_accounts ON token_transfers(from_user_account, to_user_account)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_token_transfers_mint ON token_transfers(mint)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_swap_events_token_mints ON swap_events(token_in_mint, token_out_mint)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_compression_events_owners ON compression_events(new_owner, old_owner)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_meteora_positions_wallet_pair ON meteora_positions(wallet_id, pair_id)")
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_transaction_accounts_pubkey_signer ON transaction_accounts(pubkey, signer) WHERE signer = true")
+
+	// Add indexes for USD value searches
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_token_transfers_usd_value ON token_transfers(usd_value) WHERE usd_value > 0")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_swap_events_value ON swap_events(token_in_usd, token_out_usd)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_meteora_swaps_amount_in_usd ON meteora_swaps(amount_in_usd)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_meteora_fee_claims_total_value_usd ON meteora_fee_claims(total_value_usd)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_meteora_liquidity_additions_total_value_usd ON meteora_liquidity_additions(total_value_usd)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_meteora_liquidity_removals_total_value_usd ON meteora_liquidity_removals(total_value_usd)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_meteora_pairs_tvl ON meteora_pairs(tvl)")
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_meteora_positions_total_value_usd ON meteora_positions(total_value_usd)")
 
 	return nil
 }
