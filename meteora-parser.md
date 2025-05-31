@@ -15,7 +15,7 @@ This section lists all transaction types (instructions) available in the Meteora
 ### 1. initializeLbPair
 
 Creates a new liquidity bin pair.
-
+N
 **Accounts:**
 1. `lbPair` (mut) - The LB pair account to be initialized
 2. `binArrayBitmapExtension` (mut, optional) - The bitmap extension account
@@ -547,7 +547,7 @@ Used for removing liquidity from specific bins.
 ```typescript
 {
   binId: i32,
-  liquidityAmount: BN
+  bpsToRemove: u16
 }
 ```
 
@@ -555,15 +555,12 @@ Used for removing liquidity from specific bins.
 Used for adding liquidity to a position.
 ```typescript
 {
-  amount: {
-    x: BN,
-    y: BN
-  },
-  activeId: i32,
-  maxActiveBinSlippage: number,
+  amountX: BN,
+  amountY: BN,
   binLiquidityDist: BinLiquidityDistribution[]
 }
 ```
+*Note: `activeId` and `maxActiveBinSlippage` are only present in strategy-related parameter types, not in the base `LiquidityParameter`.*
 
 ### StrategyParameters
 Used for strategy-based liquidity provisioning.
@@ -658,6 +655,170 @@ Here's an example of what a parsed swap transaction might look like:
 }
 ```
 
-## Conclusion
+## V2 Transaction Types
 
-This documentation provides a comprehensive reference for parsing Meteora DLMM transactions. By understanding the account structures, data formats, and event types, developers can build robust transaction parsers for monitoring and analyzing Meteora DLMM activity on the Solana blockchain. 
+### 88. addLiquidity2
+
+Adds liquidity to a position (v2).
+
+**Accounts:**
+1. `position` (mut) - The position account
+2. `lbPair` (mut) - The LB pair account
+3. `binArrayBitmapExtension` (mut, optional) - The bin array bitmap extension account
+4. `userTokenX` (mut) - The user's token X account
+5. `userTokenY` (mut) - The user's token Y account
+6. `reserveX` (mut) - The reserve account for token X
+7. `reserveY` (mut) - The reserve account for token Y
+8. `tokenXMint` - The mint address of token X
+9. `tokenYMint` - The mint address of token Y
+10. `sender` (signer) - The sender account
+11. `tokenXProgram` - The SPL Token program for X
+12. `tokenYProgram` - The SPL Token program for Y
+13. `eventAuthority` - The event authority account
+14. `program` - The program ID
+
+**Data:**
+- `liquidityParameter` (LiquidityParameter) - Liquidity parameters
+- `remainingAccountsInfo` (RemainingAccountsInfo) - Remaining accounts info
+
+### 89. addLiquidityByStrategy2
+
+Adds liquidity to a position using a strategy (v2).
+
+**Accounts:**
+1. `position` (mut) - The position account
+2. `lbPair` (mut) - The LB pair account
+3. `binArrayBitmapExtension` (mut, optional) - The bin array bitmap extension account
+4. `userTokenX` (mut) - The user's token X account
+5. `userTokenY` (mut) - The user's token Y account
+6. `reserveX` (mut) - The reserve account for token X
+7. `reserveY` (mut) - The reserve account for token Y
+8. `tokenXMint` - The mint address of token X
+9. `tokenYMint` - The mint address of token Y
+10. `sender` (signer) - The sender account
+11. `tokenXProgram` - The SPL Token program for X
+12. `tokenYProgram` - The SPL Token program for Y
+13. `eventAuthority` - The event authority account
+14. `program` - The program ID
+
+**Data:**
+- `liquidityParameter` (LiquidityParameterByStrategy) - Strategy liquidity parameters
+- `remainingAccountsInfo` (RemainingAccountsInfo) - Remaining accounts info
+
+### 90. addLiquidityOneSidePrecise2
+
+Adds liquidity to a position on one side with precise bin amounts (v2).
+
+**Accounts:**
+1. `position` (mut) - The position account
+2. `lbPair` (mut) - The LB pair account
+3. `binArrayBitmapExtension` (mut, optional) - The bin array bitmap extension account
+4. `userToken` (mut) - The user's token account
+5. `reserve` (mut) - The reserve account
+6. `tokenMint` - The mint address of the token
+7. `sender` (signer) - The sender account
+8. `tokenProgram` - The SPL Token program
+9. `eventAuthority` - The event authority account
+10. `program` - The program ID
+
+**Data:**
+- `liquidityParameter` (AddLiquiditySingleSidePreciseParameter2) - Precise single-side liquidity parameters
+- `remainingAccountsInfo` (RemainingAccountsInfo) - Remaining accounts info
+
+### 91. removeLiquidity2
+
+Removes liquidity from a position (v2).
+
+**Accounts:**
+1. `position` (mut) - The position account
+2. `lbPair` (mut) - The LB pair account
+3. `binArrayBitmapExtension` (mut, optional) - The bin array bitmap extension account
+4. `userTokenX` (mut) - The user's token X account
+5. `userTokenY` (mut) - The user's token Y account
+6. `reserveX` (mut) - The reserve account for token X
+7. `reserveY` (mut) - The reserve account for token Y
+8. `tokenXMint` - The mint address of token X
+9. `tokenYMint` - The mint address of token Y
+10. `sender` (signer) - The sender account
+11. `tokenXProgram` - The SPL Token program for X
+12. `tokenYProgram` - The SPL Token program for Y
+13. `memoProgram` - Memo program
+14. `eventAuthority` - The event authority account
+15. `program` - The program ID
+
+**Data:**
+- `binLiquidityRemoval` (BinLiquidityReduction[]) - Array of bin liquidity reductions
+- `remainingAccountsInfo` (RemainingAccountsInfo) - Remaining accounts info
+
+### 92. removeLiquidityByRange2
+
+Removes liquidity from a position by bin range (v2).
+
+**Accounts:**
+1. `position` (mut) - The position account
+2. `lbPair` (mut) - The LB pair account
+3. `binArrayBitmapExtension` (mut, optional) - The bin array bitmap extension account
+4. `userTokenX` (mut) - The user's token X account
+5. `userTokenY` (mut) - The user's token Y account
+6. `reserveX` (mut) - The reserve account for token X
+7. `reserveY` (mut) - The reserve account for token Y
+8. `tokenXMint` - The mint address of token X
+9. `tokenYMint` - The mint address of token Y
+10. `sender` (signer) - The sender account
+11. `tokenXProgram` - The SPL Token program for X
+12. `tokenYProgram` - The SPL Token program for Y
+13. `memoProgram` - Memo program
+14. `eventAuthority` - The event authority account
+15. `program` - The program ID
+
+**Data:**
+- `fromBinId` (i32) - Start bin ID
+- `toBinId` (i32) - End bin ID
+- `bpsToRemove` (u16) - Basis points to remove
+- `remainingAccountsInfo` (RemainingAccountsInfo) - Remaining accounts info
+
+### 93. claimFee2
+
+Claims accumulated swap fees (v2).
+
+**Accounts:**
+1. `lbPair` (mut) - The LB pair account
+2. `position` (mut) - The position account
+3. `sender` (signer) - The sender account
+4. `reserveX` (mut) - The reserve account for token X
+5. `reserveY` (mut) - The reserve account for token Y
+6. `userTokenX` (mut) - The user's token X account
+7. `userTokenY` (mut) - The user's token Y account
+8. `tokenXMint` - The mint address of token X
+9. `tokenYMint` - The mint address of token Y
+10. `tokenProgramX` - The SPL Token program for X
+11. `tokenProgramY` - The SPL Token program for Y
+12. `memoProgram` - Memo program
+13. `eventAuthority` - The event authority account
+14. `program` - The program ID
+
+**Data:**
+- `minBinId` (i32) - Minimum bin ID
+- `maxBinId` (i32) - Maximum bin ID
+- `remainingAccountsInfo` (RemainingAccountsInfo) - Remaining accounts info
+
+### 94. swap2
+
+Swaps tokens (v2).
+
+**Accounts:**
+1. `lbPair` (mut) - The LB pair account
+2. `binArrayBitmapExtension` (optional) - The bin array bitmap extension account
+3. `reserveX` (mut) - The reserve account for token X
+4. `reserveY` (mut) - The reserve account for token Y
+5. `userTokenIn` (mut) - The user's input token account
+6. `userTokenOut` (mut) - The user's output token account
+7. `tokenXMint` - The mint address of token X
+8. `tokenYMint` - The mint address of token Y
+9. `oracle` (mut) - The oracle account
+10. `hostFeeIn` (mut, optional) - The host fee account
+11. `user` (signer) - The user account
+12. `tokenXProgram` - The SPL Token program for X
+13. `tokenYProgram` - The SPL Token program for Y
+14. `memoProgram` - Memo program
+15. `
