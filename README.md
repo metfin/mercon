@@ -27,14 +27,14 @@ Live-tailing covers new activity, but historical chain data is often missing or 
 
 ## 2. Feature Checklist
 
-- [ ] Priority queue of wallets (Redis **ZSET**, score ➝ priority)
-- [ ] Dynamic, in-process worker pool (auto scales between `MIN_WORKERS` and `MAX_WORKERS`)
-- [ ] 50-endpoint RPC pool with per-worker rate-limiting & back-off
-- [ ] Accurate, idempotent writes to:
-  - Raw chain replica (partitioned PostgreSQL)
-  - Parsed analytics DB (DLMM, DAMM, swaps, transfers)
-- [ ] Automatic resume from last processed signature on restart
-- [ ] Prometheus metrics, zerolog JSON logs, prometheus metrics
+- [x] Priority queue of wallets (Redis **ZSET**, score ➝ priority)
+- [x] Dynamic, in-process worker pool (auto scales between `MIN_WORKERS` and `MAX_WORKERS`)
+- [x] 50-endpoint RPC pool with per-worker rate-limiting & back-off
+- [x] Accurate, idempotent writes to:
+  - [x] Raw chain replica (partitioned PostgreSQL)
+  - [ ] Parsed analytics DB (DLMM, DAMM, swaps, transfers)
+- [x] Automatic resume from last processed signature on restart
+- [x] Prometheus metrics, zerolog JSON logs, Posthog analytics
 
 ---
 
@@ -207,11 +207,11 @@ Mercon is intentionally _thin_; all heavy-lifting lives in the **`core`** module
 | Responsibility      | Package (module)                        |                    Status                    |
 | ------------------- | --------------------------------------- | :------------------------------------------: |
 | DB connections      | `core/database`                         |                      ✅                      |
-| Raw-chain schema    | `core/database/migrations_raw.go`       |                ⏳ (Phase 1.3)                |
+| Raw-chain schema    | `core/database/migrations_raw.go`       |                      ✅                      |
 | Analytics schema    | `core/database/migrations_analytics.go` |                 ⏳ (Phase 3)                 |
 | GORM models         | `core/models`                           | ✅ (existing) + ⏳ (`Swap`, `TokenTransfer`) |
 | Parsers (DLMM/DAMM) | `core/parsers`                          |                      ✅                      |
-| Raw insert helpers  | `core/rawchain`                         |                ⏳ (Phase 1.7)                |
+| Raw insert helpers  | `core/rawchain`                         |                      ✅                      |
 
 Mercon imports these packages—_never_ defines its own models—so there is a single source of truth.
 
