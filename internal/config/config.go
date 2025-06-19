@@ -13,8 +13,19 @@ type Config struct {
 	RedisURL string
 
 	// Database configuration
-	PGChainDSN     string
-	PGAnalyticsDSN string
+	ChainDBName     string
+	ChainDBHost       string
+	ChainDBUser       string
+	ChainDBPassword   string
+	ChainDBPort       string
+	ChainDBSSLMode    string
+
+	AnalyticsDBName     string
+	AnalyticsDBHost       string
+	AnalyticsDBUser       string
+	AnalyticsDBPassword   string
+	AnalyticsDBPort       string
+	AnalyticsDBSSLMode    string
 
 	// RPC configuration
 	RPCEndpoints []string
@@ -37,8 +48,14 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		RedisURL:       getEnv("REDIS_URL", "redis://localhost:6379"),
-		PGChainDSN:     getEnv("PG_CHAIN_DSN", ""),
-		PGAnalyticsDSN: getEnv("PG_ANALYTICS_DSN", ""),
+		ChainDBName:     getEnv("CHAIN_DB_NAME", ""),
+		ChainDBHost:     getEnv("CHAIN_DB_HOST", ""),
+		ChainDBUser:     getEnv("CHAIN_DB_USER", ""),
+		ChainDBPassword: getEnv("CHAIN_DB_PASSWORD", ""),
+		ChainDBPort:     getEnv("CHAIN_DB_PORT", ""),
+		ChainDBSSLMode:  getEnv("CHAIN_DB_SSL_MODE", ""),
+		AnalyticsDBName: getEnv("ANALYTICS_DB_NAME", ""),
+		AnalyticsDBHost: getEnv("ANALYTICS_DB_HOST", ""),
 		LogLevel:       getEnv("LOG_LEVEL", "info"),
 		PosthogKey:     getEnv("POSTHOG_KEY", ""),
 		MetricsPort:    getEnv("METRICS_PORT", "9100"),
@@ -80,12 +97,12 @@ func (c Config) validate() error {
 		return fmt.Errorf("REDIS_URL is required")
 	}
 
-	if c.PGChainDSN == "" {
-		return fmt.Errorf("PG_CHAIN_DSN is required")
+	if c.ChainDBName == "" {
+		return fmt.Errorf("CHAIN_DB_NAME is required")
 	}
 
-	if c.PGAnalyticsDSN == "" {
-		return fmt.Errorf("PG_ANALYTICS_DSN is required")
+	if c.AnalyticsDBName == "" {
+		return fmt.Errorf("ANALYTICS_DB_NAME is required")
 	}
 
 	if len(c.RPCEndpoints) == 0 {

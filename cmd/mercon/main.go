@@ -36,12 +36,12 @@ func main() {
 	
 	// Initialize chain database (for raw transactions)
 	chainDBConfig := &coreConfig.DatabaseConfig{
-		Host:     extractHost(cfg.PGChainDSN),
-		User:     extractUser(cfg.PGChainDSN),
-		Password: extractPassword(cfg.PGChainDSN),
-		DBName:   extractDBName(cfg.PGChainDSN),
-		Port:     extractPort(cfg.PGChainDSN),
-		SSLMode:  "disable", // Default for development
+		Host:     cfg.ChainDBHost,
+		User:     cfg.ChainDBUser,
+		Password: cfg.ChainDBPassword,
+		DBName:   cfg.ChainDBName,
+		Port:     cfg.ChainDBPort,
+		SSLMode:  cfg.ChainDBSSLMode,
 	}
 	
 	database.InitDB(chainDBConfig)
@@ -138,27 +138,4 @@ func main() {
 	}
 
 	log.Info().Msg("Mercon shutdown complete")
-}
-
-// Helper functions to extract database connection details from DSN
-func extractHost(dsn string) string {
-	// Simple DSN parsing - in production you'd want more robust parsing
-	// Expected format: postgres://user:password@host:port/dbname
-	return "localhost" // Default for development
-}
-
-func extractUser(dsn string) string {
-	return "postgres" // Default for development
-}
-
-func extractPassword(dsn string) string {
-	return "password" // Default for development
-}
-
-func extractDBName(dsn string) string {
-	return "mercon" // Default for development
-}
-
-func extractPort(dsn string) string {
-	return "5432" // Default for development
 }
