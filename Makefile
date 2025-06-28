@@ -25,6 +25,9 @@ build:
 run:
 	$(GORUN) $(MAIN_PATH)
 
+simple_run:
+	$(GORUN) cmd/simple_run/main.go -wallet CSdRLr6SWaCrjCgSyJ4mSHAg3EwUzymtLT6e47uj5eX9
+	
 test:
 	$(GOTEST) -v ./...
 
