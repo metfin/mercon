@@ -26,7 +26,7 @@ run:
 	$(GORUN) $(MAIN_PATH)
 
 simple_run:
-	$(GORUN) cmd/simple_run/main.go -wallet 34Ka2tn2HsEbWhS2XdQLRdRjA6CFyv2TgXoD1j6sxWTn
+	$(GORUN) cmd/simple_run/main.go -wallet 3Tbv9eCWpnvcdA3bpsgCQA91yQGywpdM1U3VKhCLg4JL
 	
 test:
 	$(GOTEST) -v ./...

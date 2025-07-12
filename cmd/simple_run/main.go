@@ -22,6 +22,8 @@ import (
 )
 
 func main() {
+	startTime := time.Now()
+
 	// Create timestamped log file
 	timestamp := time.Now().Format("20060102-150405")
 	logFileName := fmt.Sprintf("log-%s.log", timestamp)
@@ -63,6 +65,7 @@ func main() {
 	printf("🔍 Scanning wallet: %s\n", walletAddress)
 	printf("📊 Transaction limit: %d\n", limit)
 	printf("📄 Log file: %s\n", logFileName)
+	printf("🚀 Scan started at: %s\n", startTime.Format("2006-01-02 15:04:05"))
 	println(strings.Repeat("=", 80))
 
 	err = godotenv.Load()
@@ -197,6 +200,16 @@ func main() {
 	printf("🔵 Total DLMM Instructions: %d\n", dlmmCount)
 	printf("⚡ Scan completed successfully!\n")
 	printf("📄 Full log saved to: %s\n", logFileName)
+
+	// Log execution time
+	endTime := time.Now()
+	duration := endTime.Sub(startTime)
+	println("\n" + strings.Repeat("=", 80))
+	printf("⏰ EXECUTION TIME\n")
+	println(strings.Repeat("=", 80))
+	printf("Start time: %s\n", startTime.Format("2006-01-02 15:04:05"))
+	printf("End time:   %s\n", endTime.Format("2006-01-02 15:04:05"))
+	printf("Duration:   %v\n", duration)
 }
 
 // Helper function to get wallet transaction signatures
