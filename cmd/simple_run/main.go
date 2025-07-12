@@ -27,24 +27,24 @@ func main() {
 	// Create timestamped log file
 	timestamp := time.Now().Format("20060102-150405")
 	logFileName := fmt.Sprintf("log-%s.log", timestamp)
-	
+
 	logFile, err := os.Create(logFileName)
 	if err != nil {
 		log.Fatalf("Failed to create log file: %v", err)
 	}
 	defer logFile.Close()
-	
+
 	// Create a multi-writer to write to both stdout and log file
 	multiWriter := io.MultiWriter(os.Stdout, logFile)
-	
+
 	// Redirect log output to our multi-writer
 	log.SetOutput(multiWriter)
-	
+
 	// Create a custom printf function that writes to both outputs
 	printf := func(format string, args ...interface{}) {
 		fmt.Fprintf(multiWriter, format, args...)
 	}
-	
+
 	println := func(args ...interface{}) {
 		fmt.Fprintln(multiWriter, args...)
 	}
@@ -133,12 +133,12 @@ func main() {
 
 		printf("\n🔍 Transaction #%d\n", i+1)
 		printf("📝 Signature: %s\n", signatures[i])
-		
+
 		if txResult.BlockTime != nil {
 			blockTime := time.Unix(int64(*txResult.BlockTime), 0)
 			printf("⏰ Block Time: %s\n", blockTime.Format("2006-01-02 15:04:05 UTC"))
 		}
-		
+
 		if txResult.Slot != 0 {
 			printf("🎯 Slot: %d\n", txResult.Slot)
 		}
